@@ -71,6 +71,9 @@ def main():
         signal_handler(signal.SIGINT, None)
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
+        with open("crash.log", "w") as f:
+            import traceback
+            traceback.print_exc(file=f)
         print(e.__traceback__)
         signal_handler(signal.SIGTERM, None)
 
