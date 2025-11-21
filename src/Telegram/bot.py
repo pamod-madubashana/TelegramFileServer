@@ -10,13 +10,10 @@ from pyrogram import Client
 from d4rk.Handlers import BotManager , FontMessageMixin
 from d4rk.Logs import setup_logger , get_timezone_offset
 
-from src.Web import WebServerManager
+# from src.Web import WebServerManager
 from d4rk import D4RK_BotManager
 from src.Database import database
 from src.Config import API_ID , API_HASH , TOKENS , APP_NAME , TIME_ZONE ,LOGS , DATABASE_URL , OWNER , LOGGER_BOT , WEB_APP
-from src.Models import start_auto_update_service
-
-from src.Telegram.Plugins._leech import load_queue
 
 from .user import user
 
@@ -45,7 +42,7 @@ def start_bot():
         database=database,
         owner_id=OWNER,
         web_app_url=WEB_APP,
-        web_server=WebServerManager,
+        # web_server=WebServerManager,
         # call_back=start_auto_update_service
     )
     

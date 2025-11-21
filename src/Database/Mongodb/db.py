@@ -7,12 +7,8 @@ from typing import Any
 
 from d4rk.Database import db as _db
 
-from src.Database.Mongodb._chats import Chats
 from src.Database.Mongodb._users import Users
-from src.Database.Mongodb._movies import Movies
-from src.Database.Mongodb._tv import Tv
 from src.Database.Mongodb._settings import Settings
-from src.Database.Mongodb._queue import Queue
 from src.Database.Mongodb._files import Files
 
 class TypedDatabase:
