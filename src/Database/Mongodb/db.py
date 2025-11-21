@@ -19,7 +19,6 @@ class TypedDatabase:
 
     def connect(self, name: str, DATABASE_URL: str = None) -> None:
         r = _db.connect(name=name, collections=[Users,Settings,Files], DATABASE_URL=DATABASE_URL)
-        self.Movies.list_titles()
         return r
 
     def __getattr__(self, item) -> Any:
