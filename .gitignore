@@ -1,0 +1,13 @@
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.so
+*.pyc
+venv/
+venv
+logs/
+flood.txt
+test/
+.python-version
+.vscode/

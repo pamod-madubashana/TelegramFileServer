@@ -1,0 +1,39 @@
+{
+  "name": "SecretX",
+  "scripts": {},
+  "addons": [
+
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "env": {
+    "leech": {
+      "description": "Set Auto leech status",
+      "value": "False",
+      "required": true
+      
+    },
+    "ltimer": {
+      "description": "Set Auto leech time gap",
+      "value": "300",
+      "required": true
+    },
+    "SESSION": {
+      "description": "Session String , Can set this after deployed and use /connect command",
+      "required": false
+    },
+    "Webhook_url": {
+      "description": "Setup this after deployed",
+      "required": false
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1
+    }
+  },
+  "stack": "heroku-22"
+}
