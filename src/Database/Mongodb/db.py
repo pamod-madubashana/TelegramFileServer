@@ -12,17 +12,13 @@ from src.Database.Mongodb._settings import Settings
 from src.Database.Mongodb._files import Files
 
 class TypedDatabase:
-    Chats: Chats
     Users: Users
-    Movies: Movies
-    Tv: Tv
     Settings: Settings
-    Queue: Queue
     Files: Files
     is_connected: bool
 
     def connect(self, name: str, DATABASE_URL: str = None) -> None:
-        r = _db.connect(name=name, collections=[Chats,Users,Movies,Tv,Settings,Queue,Files], DATABASE_URL=DATABASE_URL)
+        r = _db.connect(name=name, collections=[Users,Settings,Files], DATABASE_URL=DATABASE_URL)
         self.Movies.list_titles()
         return r
 
@@ -31,16 +27,11 @@ class TypedDatabase:
 
     async def get_database_stats_async(self):
         try:
-            # Get counts for movies and TV shows
-            movie_count = self.Movies.count_documents({})
-            tv_count = self.Tv.count_documents({}) if hasattr(self, 'Tv') else 0
-            
+
             # Get database stats through the underlying _db object
             db_stats = _db.db.command("dbstats")
             return [{
                 "db_name": _db.database_name,
-                "movie_count": movie_count,
-                "tv_count": tv_count,
                 "storageSize": db_stats.get("storageSize", 0),
                 "dataSize": db_stats.get("dataSize", 0)
             }]
@@ -49,11 +40,8 @@ class TypedDatabase:
             # Return fallback stats
             return [{
                 "db_name": _db.database_name if hasattr(_db, 'database_name') else "unknown",
-                "movie_count": self.Movies.count_documents({}) if hasattr(self, 'Movies') else 0,
-                "tv_count": self.Tv.count_documents({}) if hasattr(self, 'Tv') else 0,
                 "storageSize": 0,
                 "dataSize": 0
             }]
-
 
 database = TypedDatabase()
