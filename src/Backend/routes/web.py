@@ -1,33 +1,29 @@
 # src/Web/web.py
 
-from fastapi import FastAPI, Request, Form, Depends, Query, HTTPException, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, Form, Depends, Query, HTTPException, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel
 import sys
 import io
 import tempfile
 import logging
+import re
+from typing import List, Dict, Any
 
 # Set up logger to match your application's logging format
 from d4rk.Logs import setup_logger
 logger = setup_logger("web_server")
 
-from ..security.credentials import require_auth, is_authenticated , require_admin
-from .template_routes import (
-    login_page, login_post, logout, dashboard_page, admin_dashboard_page,
-    media_management_page, edit_media_page_template,
-    public_movies_page, public_movie_details_page, movie_details_page, home_page,  # Add home_page import
-    google_login_callback, user_profile_page
-)
+from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token
 from .api_routes import list_media_api, delete_media_api, update_media_api, delete_movie_quality_api, delete_tv_quality_api, delete_tv_episode_api, delete_tv_season_api
 from .stream_routes import router as stream_router
 
-from .template_routes import templates
-from ..templates.theme import get_theme
-from .template_routes import get_template_context
 from src.Config import APP_NAME
+
+# Global variable for workloads (if used by other modules, otherwise just for get_workloads)
+work_loads = {}
 
 app = FastAPI(
     title=f"{APP_NAME} Media Server",
@@ -47,9 +43,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static Files ---
-app.mount("/static", StaticFiles(directory="src/Web/static"), name="static")
-
 # --- Add logging middleware ---
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -63,112 +56,67 @@ async def log_requests(request: Request, call_next):
         logger.error(f"Request failed with error: {e}")
         raise
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class GoogleLoginRequest(BaseModel):
+    token: str
+
 # --- Authentication Routes ---
-@app.get("/login", response_class=HTMLResponse)
-async def login(request: Request):
-    return await login_page(request)
+@app.post("/api/auth/login")
+async def login_post_route(request: Request, login_data: LoginRequest):
+    if verify_credentials(login_data.username, login_data.password):
+        request.session["authenticated"] = True
+        request.session["username"] = login_data.username
+        request.session["auth_method"] = "local"
+        return {"message": "Login successful", "username": login_data.username}
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password",
+    )
 
-@app.post("/login")
-async def login_post_route(request: Request, username: str = Form(...), password: str = Form(...)):
-    return await login_post(request, username, password)
+@app.post("/api/auth/google")
+async def google_login_route(request: Request, login_data: GoogleLoginRequest):
+    user_info = verify_google_token(login_data.token)
+    if user_info:
+        request.session["authenticated"] = True
+        request.session["user_email"] = user_info["email"]
+        request.session["username"] = user_info["name"]
+        request.session["user_picture"] = user_info["picture"]
+        request.session["auth_method"] = "google"
+        return {"message": "Login successful", "user": user_info}
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid Google token",
+    )
 
-@app.post("/auth/google")
-async def google_login_route(request: Request, token: str = Form(...)):
-    return await google_login_callback(request, token)
-
-@app.get("/logout")
+@app.post("/api/auth/logout")
 async def logout_route(request: Request):
-    return await logout(request)
+    request.session.clear()
+    return {"message": "Logged out successfully"}
 
-# --- Main Routes ---
-# Change root route to serve home view for everyone
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    return await home_page(request)
+@app.get("/api/auth/check")
+async def check_auth(request: Request):
+    return {
+        "authenticated": request.session.get("authenticated", False),
+        "username": request.session.get("username"),
+        "user_picture": request.session.get("user_picture"),
+        "is_admin": request.session.get("username") == "admin" or request.session.get("auth_method") == "local"
+    }
 
-# Add route for movies page
-@app.get("/movies", response_class=HTMLResponse)
-async def movies_page(request: Request):
-    return await public_movies_page(request)
+@app.get("/")
+async def root():
+    return {
+        "app": f"{APP_NAME} Media Server",
+        "version": "1.0.0",
+        "status": "running",
+        "docs_url": "/docs"
+    }
 
-# Redirect dashboard route to profile for consistency
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_route(request: Request, _: bool = Depends(require_auth)):
-    return RedirectResponse(url="/profile", status_code=302)
-
-# Add profile route that points to the user profile page
-@app.get("/profile", response_class=HTMLResponse)
-async def profile_route(request: Request, _: bool = Depends(require_auth)):
-    return await user_profile_page(request, _)
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard_route(request: Request, _: bool = Depends(require_admin)):
-    return await admin_dashboard_page(request, _)
-
-@app.get("/movie/{id}", response_class=HTMLResponse)
-async def movie_details(request: Request, id: str):
-    return await movie_details_page(request, id)
-
-@app.get("/media/manage", response_class=HTMLResponse)
-async def media_management_old(request: Request, media_type: str = "movie", _: bool = Depends(require_auth)):
-    # Store media type in session for cleaner URLs
-    request.session["media_type"] = media_type
-    return RedirectResponse(url="/media", status_code=302)
-
-@app.post("/media/type", response_class=HTMLResponse)
-async def media_type_post(request: Request, media_type: str = Form(...), _: bool = Depends(require_auth)):
-    # Store media type in session for cleaner URLs
-    request.session["media_type"] = media_type
-    return RedirectResponse(url="/media", status_code=302)
-
-@app.get("/media", response_class=HTMLResponse)
-async def media_management(request: Request, media_type: str = None, _: bool = Depends(require_auth)):
-    # If media_type is provided as query parameter, store it in session
-    if media_type:
-        request.session["media_type"] = media_type
-        return RedirectResponse(url="/media", status_code=302)
-    
-    # Retrieve media type from session, default to "movie"
-    media_type = request.session.get("media_type", "movie")
-    return await media_management_page(request, media_type, _)
-
-@app.get("/media/edit", response_class=HTMLResponse)
-async def edit_media_get(request: Request, id: str = None, media_type: str = None, _: bool = Depends(require_auth)):
-    # If id and media_type are provided, store them in session
-    if id and media_type:
-        request.session["edit_media_id"] = id
-        request.session["edit_media_type"] = media_type
-        return RedirectResponse(url="/media/edit", status_code=302)
-    
-    # Retrieve media info from session
-    id = request.session.get("edit_media_id")
-    media_type = request.session.get("edit_media_type")
-    
-    if not id or not media_type:
-        # Redirect to media management if no session data
-        return RedirectResponse(url="/media/manage?media_type=movie", status_code=302)
-    
-    return await edit_media_page_template(request, id, media_type, _)
-
-@app.post("/media/edit", response_class=HTMLResponse)
-async def edit_media_post(request: Request, id: str = Form(...), media_type: str = Form(...), _: bool = Depends(require_auth)):
-    # Store media info in session for cleaner URLs
-    request.session["edit_media_id"] = id
-    request.session["edit_media_type"] = media_type
-    return RedirectResponse(url="/media/edit", status_code=302)
-
-@app.get("/media/edit", response_class=HTMLResponse)
-async def edit_media_page(request: Request, _: bool = Depends(require_auth)):
-    # Retrieve media info from session
-    id = request.session.get("edit_media_id")
-    media_type = request.session.get("edit_media_type")
-    
-    if not id or not media_type:
-        # Redirect to media management if no session data
-        return RedirectResponse(url="/media/manage?media_type=movie", status_code=302)
-    
-    return await edit_media_page_template(request, id, media_type, _)
-
+# --- API Routes ---
 @app.get("/api/media/list")
 async def list_media(
     media_type: str = Query("movie", regex="^(movie|tv)$"), 
@@ -412,32 +360,23 @@ async def github_webhook(request: Request):
 # --- Error Handlers ---
 @app.exception_handler(401)
 async def unauthorized_handler(request: Request, exc):
-    return RedirectResponse(url="/login", status_code=302)
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Authentication required"}
+    )
 
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc):
-    # Use theme helper
-    context = get_template_context("midnight_carbon", request)
-    context["error"] = "Page not found"
-    context["message"] = "The requested page could not be found."
-    
-    return templates.TemplateResponse(
-        "error.html", 
-        context,
-        status_code=404
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Resource not found"}
     )
 
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc):
-    # Use theme helper
-    context = get_template_context("midnight_carbon", request)
-    context["error"] = "Internal server error"
-    context["message"] = "An unexpected error occurred."
-    
-    return templates.TemplateResponse(
-        "error.html", 
-        context,
-        status_code=500
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
     )
 
 # Add new API route for bot information

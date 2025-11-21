@@ -3,7 +3,7 @@ import secrets
 import mimetypes
 from typing import Tuple, Dict, Union
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 import zlib
 import json
@@ -20,7 +20,7 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from src.Database.Mongodb import database
 
 from d4rk.Logs import setup_logger
-from .template_routes import templates
+
 
 from src.Config import APP_NAME
 
@@ -655,14 +655,14 @@ async def watch_quality_handler(request: Request, id: str, quality: str):
             
             # Get app name from config or environment
             
-            # Return the video player template
-            return templates.TemplateResponse("video_player.html", {
-                "request": request,
+            # Return JSON with stream info instead of HTML template
+            return JSONResponse({
                 "id": id,
-                "title": f"{title}",
-                "mime_type": mime_type,  # Default to MP4, will be overridden by browser
-                "qualities": qualities,  # Pass available qualities to template
-                "app_name": APP_NAME  # Pass app name to template
+                "title": title,
+                "mime_type": mime_type,
+                "qualities": qualities,
+                "stream_url": f"/dl/{id}/{file_name}",
+                "app_name": APP_NAME
             })
         except Exception as e:
             print(f"Exception looking up file with ID {id}: {e}")

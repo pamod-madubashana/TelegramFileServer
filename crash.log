@@ -2,13 +2,7 @@ Traceback (most recent call last):
   File "d:\User\Documents\Repositories\Telegram\fileServer\__main__.py", line 68, in main
     start_bot()
     ~~~~~~~~~^^
-  File "d:\User\Documents\Repositories\Telegram\fileServer\src\Telegram\bot.py", line 32, in start_bot
-    _bot_manager = D4RK_BotManager(
-        app_name=APP_NAME,
-    ...<12 lines>...
-        # call_back=start_auto_update_service
-    )
-  File "D:\User\Documents\Repositories\Telegram\fileServer\.venv\Lib\site-packages\d4rk\_bot_manager.py", line 99, in __init__
-    self.web_server_manager = web_server(self) or  WebServerManager(self)
-                              ~~~~~~~~~~^^^^^^
-TypeError: 'NoneType' object is not callable
+  File "d:\User\Documents\Repositories\Telegram\fileServer\src\Telegram\bot.py", line 45, in start_bot
+    web_server=WebServerManager,
+               ^^^^^^^^^^^^^^^^
+NameError: name 'WebServerManager' is not defined
