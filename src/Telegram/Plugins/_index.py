@@ -44,19 +44,40 @@ class IndexMessages:
 
     async def save_file(self,message: Message):
         try:
-            media = message.document or message.video
+            media = message.document or message.video or message.photo or message.voice or message.audio
             if not media:
                 return None
-            logger.info(f"Processing file message {message.caption or media.file_name}")
-            file_name = getattr(media, 'file_name', None)
-            file_caption = message.caption or ""
+            if message.document:
+                file_type = "document"
+                file_name = getattr(media, 'file_name', "N/A")
+                thumbnail = media.thumbs[0].file_id if media.thumbs else None
+            elif message.video:
+                file_type = "video"
+                file_name = getattr(media, 'file_name', "N/A")
+                thumbnail = media.thumbs[0].file_id if media.thumbs else None
+            elif message.photo:
+                file_type = "photo"
+                file_name = f"Photo_{media.file_unique_id}.jpg"
+                thumbnail = media.file_id # Photo itself is the thumbnail/image
+            elif message.voice:
+                file_type = "voice"
+                file_name = "Voice_Note.ogg"
+                thumbnail = None
+            elif message.audio:
+                file_type = "audio"
+                file_name = getattr(media, 'file_name', "N/A")
+                thumbnail = media.thumbs[0].file_id if media.thumbs else None
+            
+            logger.info(f"Processing file message {message.caption or file_name}")
+            file_unique_id = media.file_unique_id
             file_size = media.file_size
             file_size = int(media.file_size/1024/1024)
-            file_unique_id = media.file_unique_id
-            
+            file_caption = message.caption or "N/A"
             return database.Files.add_file(
                 chat_id=message.chat.id,
                 message_id=message.id,
+                thumbnail=thumbnail,
+                file_type=file_type,
                 file_unique_id=file_unique_id,
                 file_size=file_size,
                 file_name=file_name,
@@ -82,14 +103,13 @@ class IndexMessages:
             try:
                 message_ids = list(range(current, current + new_diff))
                 messages = await client.get_messages(chat_id=chat_id, message_ids=message_ids)
-                
                 valid_messages = [msg for msg in messages if msg is not None]
-                file_messages = [msg for msg in valid_messages if msg.document or msg.video]
+                file_messages = [msg for msg in valid_messages if msg.document or msg.video or msg.photo or msg.voice or msg.audio]
                 
                 for msg in valid_messages:
                     if msg.id not in self.processed_message_ids:
                         await self.file_queue.put(msg)
-                        if msg.document or msg.video:
+                        if msg.document or msg.video or msg.photo or msg.voice or msg.audio:
                             self.total_file_messages += 1
                 
                 logger.info(f"Processed {len(valid_messages)} messages ({len(file_messages)} with files), current: {current}, total: {self.total}")
@@ -169,7 +189,7 @@ class IndexMessages:
                         try:
                             message = await asyncio.wait_for(self.file_queue.get(), timeout=1.0)
                             remaining_messages += 1
-                            if not (message.document or message.video):
+                            if not (message.document or message.video or message.photo or message.voice or message.audio):
                                 self.non_file_count += 1
                                 logger.debug(f"Processed remaining non-file message {message.id}")
                             self.file_queue.task_done()
@@ -199,7 +219,7 @@ class IndexMessages:
                             
                             self.processed_message_ids.add(message.id)
                             
-                            if message.document or message.video:
+                            if message.document or message.video or message.photo or message.voice or message.audio:
                                 self.processed_file_messages += 1
                                 logger.info(f"Processing file message {message.id} (#{self.processed_file_messages}/{self.total_file_messages}): {message.caption or getattr(message.document or message.video, 'file_name', 'No filename')}")
                                 result = await self.save_file(message)
@@ -348,22 +368,23 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
 async def cancel_indexing_callback(client: Client, callback: CallbackQuery) -> None:
     global current_indexer
     try:
-        if current_indexer:
-            current_indexer.cancel_indexing()
+        indexer = current_indexer
+        if indexer:
+            indexer.cancel_indexing()
             
             cancel_text = f"""❌ <b>Indexing Cancelled!</b>
 
 📊 <b>Progress When Stopped:</b>
-• Messages Processed: {current_indexer.index}/{current_indexer.total}
-• Files Processed: {current_indexer.processed_file_messages}/{current_indexer.total_file_messages}
-• Files Saved: {current_indexer.database}
-• Files Failed: {current_indexer.failed_count}
-• Files Skipped: {current_indexer.skipped_count}
+• Messages Processed: {indexer.index}/{indexer.total}
+• Files Processed: {indexer.processed_file_messages}/{indexer.total_file_messages}
+• Files Saved: {indexer.database}
+• Files Failed: {indexer.failed_count}
+• Files Skipped: {indexer.skipped_count}
 
 🚫 Process stopped by user request."""
             
             await callback.message.edit(cancel_text)
-            logger.warning(f"Indexing cancelled by user. Progress: {current_indexer.processed_file_messages}/{current_indexer.total_file_messages} files processed")
+            logger.warning(f"Indexing cancelled by user. Progress: {indexer.processed_file_messages}/{indexer.total_file_messages} files processed")
         else:
             await callback.message.edit("❌ <b>No Active Indexing</b>\n\nNo indexing process found to cancel.")
             

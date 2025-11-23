@@ -21,6 +21,8 @@ from .api_routes import list_media_api, delete_media_api, update_media_api, dele
 from .stream_routes import router as stream_router
 
 from src.Config import APP_NAME
+from src.Database import database
+from dataclasses import asdict
 
 # Global variable for workloads (if used by other modules, otherwise just for get_workloads)
 work_loads = {}
@@ -117,126 +119,19 @@ async def root():
     }
 
 # --- API Routes ---
-@app.get("/api/media/list")
-async def list_media(
-    media_type: str = Query("movie", regex="^(movie|tv)$"), 
-    page: int = Query(1, ge=1), 
-    page_size: int = Query(24, ge=1, le=100), 
-    search: str = Query("", max_length=100),
-    _: bool = Depends(require_auth)
-):
-    return await list_media_api(media_type, page, page_size, search)
-
-@app.delete("/api/media/delete/{tmdb_id}")
-async def delete_media(tmdb_id: str, db_index: str, media_type: str, _: bool = Depends(require_auth)):
-    # Handle "undefined" values from frontend
+@app.get("/api/files")
+async def get_all_files_route(_: bool = Depends(require_auth)):
     try:
-        # Convert to integers if they're valid numbers, otherwise use defaults
-        if tmdb_id == "undefined" or not tmdb_id.isdigit():
-            tmdb_id_int = 0
-        else:
-            tmdb_id_int = int(tmdb_id)
-            
-        if db_index == "undefined" or not db_index.isdigit():
-            db_index_int = 0
-        else:
-            db_index_int = int(db_index)
-    except ValueError:
-        # Fallback to defaults if conversion fails
-        tmdb_id_int = 0
-        db_index_int = 0
-    
-    return await delete_media_api(tmdb_id_int, db_index_int, media_type)
-
-@app.put("/api/media/update/{id}")
-async def update_media(request: Request, id: str, media_type: str, _: bool = Depends(require_auth)):
-    
-    return await update_media_api(request, id, media_type)
-
-@app.delete("/api/media/delete-quality/{tmdb_id}")
-async def delete_movie_quality(tmdb_id: str, db_index: str, quality: str, _: bool = Depends(require_auth)):
-    # Handle "undefined" values from frontend
-    try:
-        # Convert to integers if they're valid numbers, otherwise use defaults
-        if tmdb_id == "undefined" or not tmdb_id.isdigit():
-            tmdb_id_int = 0
-        else:
-            tmdb_id_int = int(tmdb_id)
-            
-        if db_index == "undefined" or not db_index.isdigit():
-            db_index_int = 0
-        else:
-            db_index_int = int(db_index)
-    except ValueError:
-        # Fallback to defaults if conversion fails
-        tmdb_id_int = 0
-        db_index_int = 0
-    
-    return await delete_movie_quality_api(tmdb_id_int, db_index_int, quality)
-
-@app.delete("/api/media/delete-tv-quality/{tmdb_id}")
-async def delete_tv_quality(tmdb_id: str, db_index: str, season: int, episode: int, quality: str, _: bool = Depends(require_auth)):
-    # Handle "undefined" values from frontend
-    try:
-        # Convert to integers if they're valid numbers, otherwise use defaults
-        if tmdb_id == "undefined" or not tmdb_id.isdigit():
-            tmdb_id_int = 0
-        else:
-            tmdb_id_int = int(tmdb_id)
-            
-        if db_index == "undefined" or not db_index.isdigit():
-            db_index_int = 0
-        else:
-            db_index_int = int(db_index)
-    except ValueError:
-        # Fallback to defaults if conversion fails
-        tmdb_id_int = 0
-        db_index_int = 0
-    
-    return await delete_tv_quality_api(tmdb_id_int, db_index_int, season, episode, quality)
-
-@app.delete("/api/media/delete-tv-episode/{tmdb_id}")
-async def delete_tv_episode(tmdb_id: str, db_index: str, season: int, episode: int, _: bool = Depends(require_auth)):
-    # Handle "undefined" values from frontend
-    try:
-        # Convert to integers if they're valid numbers, otherwise use defaults
-        if tmdb_id == "undefined" or not tmdb_id.isdigit():
-            tmdb_id_int = 0
-        else:
-            tmdb_id_int = int(tmdb_id)
-            
-        if db_index == "undefined" or not db_index.isdigit():
-            db_index_int = 0
-        else:
-            db_index_int = int(db_index)
-    except ValueError:
-        # Fallback to defaults if conversion fails
-        tmdb_id_int = 0
-        db_index_int = 0
-    
-    return await delete_tv_episode_api(tmdb_id_int, db_index_int, season, episode)
-
-@app.delete("/api/media/delete-tv-season/{tmdb_id}")
-async def delete_tv_season(tmdb_id: str, db_index: str, season: int, _: bool = Depends(require_auth)):
-    # Handle "undefined" values from frontend
-    try:
-        # Convert to integers if they're valid numbers, otherwise use defaults
-        if tmdb_id == "undefined" or not tmdb_id.isdigit():
-            tmdb_id_int = 0
-        else:
-            tmdb_id_int = int(tmdb_id)
-            
-        if db_index == "undefined" or not db_index.isdigit():
-            db_index_int = 0
-        else:
-            db_index_int = int(db_index)
-    except ValueError:
-        # Fallback to defaults if conversion fails
-        tmdb_id_int = 0
-        db_index_int = 0
-    
-    return await delete_tv_season_api(tmdb_id_int, db_index_int, season)
-
+        files_data = database.Files.get_all_files()
+        files_list = []
+        for f in files_data:
+            f_dict = asdict(f)
+            f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            files_list.append(f_dict)
+        return {"files": files_list}
+    except Exception as e:
+        logger.error(f"Error fetching files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/system/workloads")
 async def get_workloads(_: bool = Depends(require_auth)):
@@ -252,15 +147,6 @@ async def get_workloads(_: bool = Depends(require_auth)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Add this new API route for public movie listing (no authentication required)
-@app.get("/api/public/media/list")
-async def list_public_media(
-    media_type: str = Query("movie", regex="^(movie|tv)$"), 
-    page: int = Query(1, ge=1), 
-    page_size: int = Query(24, ge=1, le=100), 
-    search: str = Query("", max_length=100)
-):
-    return await list_media_api(media_type, page, page_size, search)
 
 # --- GitHub Webhook for Auto-Update ---
 @app.post("/github")

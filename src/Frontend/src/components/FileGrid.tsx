@@ -51,6 +51,7 @@ export const FileGrid = ({
 
   const handleContextMenu = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.preventDefault();
+    console.log('Context menu triggered for:', item.name);
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -98,7 +99,7 @@ export const FileGrid = ({
     if (item.type === "folder") {
       return <Folder className="w-12 h-12 text-primary" />;
     }
-    
+
     switch (item.extension) {
       case "jpg":
       case "png":
@@ -131,17 +132,15 @@ export const FileGrid = ({
                   onDragEnd={handleDragEnd}
                   onDragOver={item.type === "folder" ? handleDragOver : undefined}
                   onDrop={item.type === "folder" ? (e) => handleDrop(e, item) : undefined}
-                  className={`flex flex-col items-center p-3 rounded-lg transition-all ${
-                    isDragging ? "opacity-50 scale-95" : ""
-                  } ${
-                    item.type === "folder" && draggedItem && draggedItem.name !== item.name
+                  onContextMenu={(e) => !isRenaming && handleContextMenu(e, item, index)}
+                  className={`flex flex-col items-center p-3 rounded-lg transition-all ${isDragging ? "opacity-50 scale-95" : ""
+                    } ${item.type === "folder" && draggedItem && draggedItem.name !== item.name
                       ? "ring-2 ring-primary ring-offset-2"
                       : ""
-                  }`}
+                    }`}
                 >
                   <button
                     onClick={() => !isRenaming && handleItemClick(item)}
-                    onContextMenu={(e) => !isRenaming && handleContextMenu(e, item, index)}
                     className="flex flex-col items-center w-full hover:bg-accent rounded-lg p-2 transition-colors group"
                   >
                     <div className="mb-2">{getFileIcon(item)}</div>
@@ -175,15 +174,14 @@ export const FileGrid = ({
                   onDragEnd={handleDragEnd}
                   onDragOver={item.type === "folder" ? handleDragOver : undefined}
                   onDrop={item.type === "folder" ? (e) => handleDrop(e, item) : undefined}
-                  className={`transition-all ${isDragging ? "opacity-50" : ""} ${
-                    item.type === "folder" && draggedItem && draggedItem.name !== item.name
-                      ? "ring-2 ring-primary"
-                      : ""
-                  }`}
+                  onContextMenu={(e) => !isRenaming && handleContextMenu(e, item, index)}
+                  className={`transition-all ${isDragging ? "opacity-50" : ""} ${item.type === "folder" && draggedItem && draggedItem.name !== item.name
+                    ? "ring-2 ring-primary"
+                    : ""
+                    }`}
                 >
                   <button
                     onClick={() => !isRenaming && handleItemClick(item)}
-                    onContextMenu={(e) => !isRenaming && handleContextMenu(e, item, index)}
                     className="w-full flex items-center gap-3 p-2 rounded hover:bg-accent transition-colors group"
                   >
                     <div className="flex-shrink-0">{getFileIcon(item)}</div>
@@ -200,8 +198,13 @@ export const FileGrid = ({
                         <span className="text-sm text-left flex-1 text-foreground group-hover:text-accent-foreground">
                           {item.name}
                         </span>
+                        {item.size && (
+                          <span className="text-xs text-muted-foreground mr-2">
+                            {formatBytes(item.size)}
+                          </span>
+                        )}
                         <span className="text-xs text-muted-foreground">
-                          {item.type === "folder" ? "Folder" : item.extension?.toUpperCase()}
+                          {item.type === "folder" ? "Folder" : item.fileType?.toUpperCase() || item.extension?.toUpperCase()}
                         </span>
                       </>
                     )}
@@ -235,9 +238,9 @@ export const FileGrid = ({
           onPaste={
             onPaste
               ? () => {
-                  onPaste();
-                  setContextMenu(null);
-                }
+                onPaste();
+                setContextMenu(null);
+              }
               : undefined
           }
           onDelete={() => {
@@ -253,3 +256,23 @@ export const FileGrid = ({
     </div>
   );
 };
+
+// Utility function to format file size (input is in MB)
+function formatBytes(sizeInMB: number): string {
+  if (sizeInMB === 0) return '0 MB';
+
+  // If less than 1 MB, show in KB
+  if (sizeInMB < 1) {
+    const kb = sizeInMB * 1024;
+    return Math.round(kb * 100) / 100 + ' KB';
+  }
+
+  // If less than 1024 MB (1 GB), show in MB
+  if (sizeInMB < 1024) {
+    return Math.round(sizeInMB * 100) / 100 + ' MB';
+  }
+
+  // Otherwise show in GB
+  const gb = sizeInMB / 1024;
+  return Math.round(gb * 100) / 100 + ' GB';
+}

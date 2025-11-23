@@ -1,67 +1,40 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { FileGrid } from "./FileGrid";
 import { FileItem } from "./types";
 import { useFileOperations } from "@/hooks/useFileOperations";
+import { useFiles } from "@/hooks/useFiles";
 import { DeleteDialog } from "./DeleteDialog";
 import { toast } from "sonner";
 
-const mockFileSystem: Record<string, FileItem[]> = {
-  Pictures: [
-    { name: "Camera Roll", type: "folder", icon: "📁" },
-    { name: "Chrom.bg", type: "folder", icon: "📁" },
-    { name: "Feedback", type: "folder", icon: "📁" },
-    { name: "Grub", type: "folder", icon: "📁" },
-    { name: "MEmu Photo", type: "folder", icon: "📁" },
-    { name: "Photos", type: "folder", icon: "📁" },
-    { name: "Saved Pictures", type: "folder", icon: "📁" },
-    { name: "Screenshots", type: "folder", icon: "📁" },
-    { name: "SS", type: "folder", icon: "📁" },
-    { name: "UbisoftConnect", type: "folder", icon: "📁" },
-    { name: "v-log", type: "folder", icon: "📁" },
-    { name: "Wallpapers", type: "folder", icon: "📁" },
-    { name: "capsule_616x353.jpg", type: "file", icon: "🖼️", extension: "jpg" },
-    { name: "doc.pdf", type: "file", icon: "📄", extension: "pdf" },
-    { name: "MtFlash20220507.zip", type: "file", icon: "📦", extension: "zip" },
-    { name: "Screenshot 2023-06-17 182445.png", type: "file", icon: "🖼️", extension: "png" },
-  ],
-  "Camera Roll": [
-    { name: "photo1.jpg", type: "file", icon: "🖼️", extension: "jpg" },
-    { name: "photo2.jpg", type: "file", icon: "🖼️", extension: "jpg" },
-  ],
-  Desktop: [
-    { name: "Project.docx", type: "file", icon: "📄", extension: "docx" },
-  ],
-  Downloads: [
-    { name: "setup.exe", type: "file", icon: "⚙️", extension: "exe" },
-  ],
-  Documents: [],
-  Music: [],
-  Videos: [],
-};
-
 export const FileExplorer = () => {
-  const [currentPath, setCurrentPath] = useState<string[]>(["Pictures"]);
+  const [currentPath, setCurrentPath] = useState<string[]>(["All Files"]);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
-  const [fileSystem, setFileSystem] = useState(mockFileSystem);
+  const [selectedFilter, setSelectedFilter] = useState<string>("all");
 
+  const { files, isLoading, isError, error } = useFiles();
   const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard } = useFileOperations();
 
-  const currentFolder = currentPath[currentPath.length - 1];
-  const currentItems = fileSystem[currentFolder] || [];
 
-  const filteredItems = currentItems.filter((item) =>
-    item.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const currentFolder = currentPath[currentPath.length - 1];
+
+  // Filter files based on selected filter and search query
+  const filteredItems = files.filter((item) => {
+    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (selectedFilter === "all") return matchesSearch;
+
+    // Filter by file type
+    return matchesSearch && item.fileType === selectedFilter;
+  });
 
   const handleNavigate = (folderName: string) => {
-    if (mockFileSystem[folderName]) {
-      setCurrentPath([...currentPath, folderName]);
-    }
+    // For now, we don't have folder navigation since API returns flat list
+    // This could be extended later if needed
   };
 
   const handleBack = () => {
@@ -85,39 +58,8 @@ export const FileExplorer = () => {
   };
 
   const handlePaste = () => {
-    if (!clipboard) return;
-
-    const newFileSystem = { ...fileSystem };
-    const targetFolder = currentFolder;
-
-    // Check if item already exists in target folder
-    const exists = newFileSystem[targetFolder]?.some(
-      (item) => item.name === clipboard.item.name
-    );
-
-    if (exists) {
-      toast.error(`"${clipboard.item.name}" already exists in this folder`);
-      return;
-    }
-
-    // Add item to target folder
-    if (!newFileSystem[targetFolder]) {
-      newFileSystem[targetFolder] = [];
-    }
-    newFileSystem[targetFolder] = [...newFileSystem[targetFolder], clipboard.item];
-
-    // If cut operation, remove from source folder
-    if (clipboard.operation === "cut") {
-      newFileSystem[clipboard.sourcePath] = newFileSystem[clipboard.sourcePath].filter(
-        (item) => item.name !== clipboard.item.name
-      );
-      clearClipboard();
-      toast.success(`Moved "${clipboard.item.name}"`);
-    } else {
-      toast.success(`Pasted "${clipboard.item.name}"`);
-    }
-
-    setFileSystem(newFileSystem);
+    // Paste functionality disabled for now - requires backend API
+    toast.info("Paste functionality coming soon");
   };
 
   const handleDelete = (item: FileItem, index: number) => {
@@ -127,16 +69,8 @@ export const FileExplorer = () => {
   const confirmDelete = () => {
     if (!deleteDialog) return;
 
-    const newFileSystem = { ...fileSystem };
-    newFileSystem[currentFolder] = currentItems.filter((_, i) => i !== deleteDialog.index);
-    
-    // If it's a folder, remove its contents from fileSystem
-    if (deleteDialog.item.type === "folder") {
-      delete newFileSystem[deleteDialog.item.name];
-    }
-
-    setFileSystem(newFileSystem);
-    toast.success(`Deleted "${deleteDialog.item.name}"`);
+    // Delete functionality disabled for now - requires backend API
+    toast.info("Delete functionality coming soon");
     setDeleteDialog(null);
   };
 
@@ -147,71 +81,55 @@ export const FileExplorer = () => {
   const confirmRename = (newName: string) => {
     if (!renamingItem) return;
 
-    const newFileSystem = { ...fileSystem };
-    const oldName = renamingItem.item.name;
-    
-    // Check if name already exists
-    const exists = currentItems.some(
-      (item, i) => item.name === newName && i !== renamingItem.index
-    );
-
-    if (exists) {
-      toast.error(`"${newName}" already exists`);
-      setRenamingItem(null);
-      return;
-    }
-
-    // Update item name
-    newFileSystem[currentFolder][renamingItem.index] = {
-      ...renamingItem.item,
-      name: newName,
-    };
-
-    // If it's a folder, update the folder key in fileSystem
-    if (renamingItem.item.type === "folder" && newFileSystem[oldName]) {
-      newFileSystem[newName] = newFileSystem[oldName];
-      delete newFileSystem[oldName];
-    }
-
-    setFileSystem(newFileSystem);
-    toast.success(`Renamed to "${newName}"`);
+    // Rename functionality disabled for now - requires backend API
+    toast.info("Rename functionality coming soon");
     setRenamingItem(null);
   };
 
   const handleMove = (item: FileItem, targetFolder: string) => {
-    const newFileSystem = { ...fileSystem };
-    
-    // Check if item already exists in target folder
-    const exists = newFileSystem[targetFolder]?.some(
-      (existingItem) => existingItem.name === item.name
-    );
-
-    if (exists) {
-      toast.error(`"${item.name}" already exists in ${targetFolder}`);
-      return;
-    }
-
-    // Remove from current folder
-    newFileSystem[currentFolder] = currentItems.filter((i) => i.name !== item.name);
-
-    // Add to target folder
-    if (!newFileSystem[targetFolder]) {
-      newFileSystem[targetFolder] = [];
-    }
-    newFileSystem[targetFolder] = [...newFileSystem[targetFolder], item];
-
-    setFileSystem(newFileSystem);
-    toast.success(`Moved "${item.name}" to ${targetFolder}`);
+    // Move functionality disabled for now - requires backend API
+    toast.info("Move functionality coming soon");
   };
+
+  const handleFilterChange = (filter: string) => {
+    setSelectedFilter(filter);
+    setCurrentPath(["All Files"]);
+  };
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="flex h-screen bg-background text-foreground items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading files...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (isError) {
+    return (
+      <div className="flex h-screen bg-background text-foreground items-center justify-center">
+        <div className="text-center">
+          <p className="text-destructive mb-4">Failed to load files</p>
+          <p className="text-sm text-muted-foreground">{error?.message || "Unknown error"}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar
         currentPath={currentPath}
-        onNavigate={(folder) => setCurrentPath([folder])}
+        onNavigate={handleFilterChange}
         onDrop={handleMove}
+        files={files}
+        selectedFilter={selectedFilter}
       />
-      
+
       <div className="flex-1 flex flex-col">
         <TopBar
           currentPath={currentPath}
@@ -223,7 +141,7 @@ export const FileExplorer = () => {
           onBreadcrumbClick={handleBreadcrumbClick}
           onPaste={hasClipboard() ? handlePaste : undefined}
         />
-        
+
         <FileGrid
           items={filteredItems}
           viewMode={viewMode}

@@ -12,8 +12,11 @@ logger = setup_logger(__name__)
 
 @dataclass
 class FileData:
+    id: int 
     chat_id: int
     message_id: int
+    thumbnail: str = None
+    file_type: Literal["document","video","photo","voice","audio"] = None
     file_unique_id: str = None
     file_size: int = None
     file_name: str|None = None
@@ -35,12 +38,14 @@ class Files(Collection):
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
     
-    def add_file(self,chat_id: int, message_id: int, file_unique_id: str, file_size: int, file_name: str, file_caption: str):
+    def add_file(self,chat_id: int, message_id: int, thumbnail: str,file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str):
         saved = self.check_if_exists(chat_id,message_id,file_unique_id)
         if not saved:
             self.insert_one({
                 "chat_id": chat_id,
                 "message_id": message_id,
+                "thumbnail": thumbnail,
+                "file_type": file_type,
                 "file_unique_id": file_unique_id,
                 "file_size": file_size,
                 "file_name": file_name,
@@ -48,3 +53,17 @@ class Files(Collection):
             }   )
             return True
         return None
+
+    def get_all_files(self):
+        files = self.find()
+        return [FileData(
+            id=file.get("_id"), 
+            chat_id=file.get("chat_id"), 
+            message_id=file.get("message_id"), 
+            file_type=file.get("file_type"),
+            thumbnail=file.get("thumbnail"), 
+            file_unique_id=file.get("file_unique_id"), 
+            file_size=file.get("file_size"), 
+            file_name=file.get("file_name"), 
+            file_caption=file.get("file_caption")
+            ) for file in files] 
