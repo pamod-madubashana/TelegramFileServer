@@ -19,6 +19,7 @@ interface FileGridProps {
   onRenameConfirm: (newName: string) => void;
   onRenameCancel: () => void;
   currentFolder: string;
+  onNewFolder?: () => void;
 }
 
 interface ContextMenuState {
@@ -45,6 +46,7 @@ export const FileGrid = ({
   onRenameConfirm,
   onRenameCancel,
   currentFolder,
+  onNewFolder,
 }: FileGridProps) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
@@ -266,6 +268,10 @@ export const FileGrid = ({
             onRename(contextMenu.item, contextMenu.index);
             setContextMenu(null);
           }}
+          onNewFolder={onNewFolder ? () => {
+            onNewFolder();
+            setContextMenu(null);
+          } : undefined}
         />
       )}
     </div>

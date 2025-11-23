@@ -33,12 +33,19 @@ export const FileExplorer = () => {
 
   // Filter files based on current path and search query
   const getFilteredItems = (): FileItem[] => {
-    // If we're in Home and no filter is selected, show virtual folders
+    // If we're in Home and no filter is selected, show virtual folders and user-created folders
     if (currentFolder === "Home" && selectedFilter === "all") {
       const filteredFolders = virtualFolders.filter((folder) =>
         folder.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
-      return filteredFolders;
+
+      // Add user-created folders (those with type 'folder')
+      const userFolders = files.filter((f) => f.type === "folder" || f.fileType === "folder");
+      const filteredUserFolders = userFolders.filter((folder) =>
+        folder.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+
+      return [...filteredFolders, ...filteredUserFolders];
     }
 
     // If we're in a specific folder or have a filter, show files
@@ -136,6 +143,35 @@ export const FileExplorer = () => {
     setCurrentPath(["Home"]);
   };
 
+  const handleNewFolder = async () => {
+    const folderName = prompt("Enter folder name:");
+    if (!folderName) return;
+
+    try {
+      const response = await fetch("/api/folders/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          folderName,
+          currentPath: currentFolder,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to create folder");
+      }
+
+      toast.success(`Folder "${folderName}" created successfully`);
+      // Refresh the file list
+      window.location.reload();
+    } catch (error) {
+      toast.error("Failed to create folder");
+      console.error(error);
+    }
+  };
+
   // Show loading state
   if (isLoading) {
     return (
@@ -197,6 +233,7 @@ export const FileExplorer = () => {
           onRenameConfirm={confirmRename}
           onRenameCancel={() => setRenamingItem(null)}
           currentFolder={currentFolder}
+          onNewFolder={handleNewFolder}
         />
       </div>
 

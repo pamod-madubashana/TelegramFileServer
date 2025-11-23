@@ -127,34 +127,40 @@ async def get_all_files_route(_: bool = Depends(require_auth)):
         for f in files_data:
             f_dict = asdict(f)
             f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            
+            # Convert desktop.ini files to folder representations
+            if f.file_name == "desktop.ini":
+                # Extract folder name from path (e.g., "/FolderName/desktop.ini" -> "FolderName")
+                path_parts = f.file_path.strip('/').split('/')
+                if len(path_parts) >= 2:
+                    folder_name = path_parts[-2]  # Get the folder name before desktop.ini
+                else:
+                    folder_name = "New Folder"
+                
+                # Transform to folder object
+                f_dict['file_name'] = folder_name
+                f_dict['file_type'] = 'folder'
+            
             files_list.append(f_dict)
         return {"files": files_list}
     except Exception as e:
         logger.error(f"Error fetching files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/system/workloads")
-async def get_workloads(_: bool = Depends(require_auth)):
-    try:
-        return {
-        "version": "1.0.0",
-        "status": "running",
-        "docs_url": "/docs"
-    }
+class CreateFolderRequest(BaseModel):
+    folderName: str
+    currentPath: str
 
-# --- API Routes ---
-@app.get("/api/files")
-async def get_all_files_route(_: bool = Depends(require_auth)):
+@app.post("/api/folders/create")
+async def create_folder_route(request: CreateFolderRequest, _: bool = Depends(require_auth)):
     try:
-        files_data = database.Files.get_all_files()
-        files_list = []
-        for f in files_data:
-            f_dict = asdict(f)
-            f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
-            files_list.append(f_dict)
-        return {"files": files_list}
+        success = database.Files.create_folder(request.folderName, request.currentPath)
+        if success:
+            return {"message": f"Folder '{request.folderName}' created successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Folder already exists")
     except Exception as e:
-        logger.error(f"Error fetching files: {e}")
+        logger.error(f"Error creating folder: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/system/workloads")

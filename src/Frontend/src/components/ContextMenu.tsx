@@ -27,6 +27,7 @@ interface ContextMenuProps {
   onPaste?: () => void;
   onDelete: () => void;
   onRename: () => void;
+  onNewFolder?: () => void;
 }
 
 interface MenuItem {
@@ -50,6 +51,7 @@ export const ContextMenu = ({
   onPaste,
   onDelete,
   onRename,
+  onNewFolder,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -100,6 +102,9 @@ export const ContextMenu = ({
         break;
       case "delete":
         onDelete();
+        break;
+      case "new_folder":
+        onNewFolder?.();
         break;
       default:
         console.log(`${action} on ${itemName}`);

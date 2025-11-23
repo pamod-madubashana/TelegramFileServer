@@ -5,7 +5,7 @@ export interface FileItem {
   icon: string;
   extension?: string;
   size?: number;
-  fileType?: 'document' | 'video' | 'photo' | 'voice' | 'audio';
+  fileType?: 'document' | 'video' | 'photo' | 'voice' | 'audio' | 'folder';
   thumbnail?: string | null;
 }
 
@@ -13,7 +13,7 @@ export interface ApiFile {
   id: string;
   chat_id: number;
   message_id: number;
-  file_type: 'document' | 'video' | 'photo' | 'voice' | 'audio';
+  file_type: 'document' | 'video' | 'photo' | 'voice' | 'audio' | 'folder';
   thumbnail: string | null;
   file_unique_id: string;
   file_size: number;
@@ -49,6 +49,17 @@ export const getFileIcon = (fileType: string, fileName?: string): string => {
 export const apiFileToFileItem = (apiFile: ApiFile): FileItem => {
   const fileName = apiFile.file_name || `${apiFile.file_type}_${apiFile.message_id}`;
   const extension = fileName.split('.').pop();
+
+  // Handle folder type
+  if (apiFile.file_type === 'folder') {
+    return {
+      id: apiFile.id,
+      name: fileName,
+      type: 'folder',
+      icon: '📁',
+      fileType: 'folder',
+    };
+  }
 
   return {
     id: apiFile.id,
