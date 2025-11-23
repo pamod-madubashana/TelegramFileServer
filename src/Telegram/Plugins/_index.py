@@ -13,67 +13,7 @@ from d4rk.Utils import CustomFilters , ButtonMaker ,  round_robin ,command , but
 from src.Database import database
 
 
-file_queue = asyncio.Queue()
-semaphore = asyncio.Semaphore(1)
-worker_running = False
-
-logger = setup_logger(__name__)    
-
-
-
-async def handle_file_task(client: Client, message: Message) -> bool:
-    global worker_running
-    await file_queue.put(message)
-    logger.info(f"Queued file from message {message.id}")
-    if worker_running is False:
-        worker_running = True
-        asyncio.create_task(file_worker(client))
-
-
-async def file_worker(client) -> None:
-    global worker_running
-    while worker_running:
-        if file_queue.empty():
-            worker_running = False
-            break
-        message = await file_queue.get()
-        async def job() -> None:
-            async with semaphore:
-                try:
-                    await save_file(client,message)
-                except Exception as e:
-                    logger.error(f"Worker error: {e}")
-                finally:
-                    file_queue.task_done()
-        await asyncio.sleep(0.1)
-        asyncio.create_task(job())
-
-
-async def save_file(client: Client, message: Message):
-    try:
-        media = message.document or message.video
-        if not media:
-            return None
-        logger.info(f"Processing file message {media.caption or media.file_name}")
-        file_name = getattr(media, 'file_name', None)
-        file_caption = message.caption or ""
-        file_size = media.file_size
-        file_unique_id = media.file_unique_id
-        
-        return database.Files.add_file(
-            chat_id=message.chat.id,
-            message_id=message.id,
-            file_unique_id=file_unique_id,
-            file_size=file_size,
-            file_name=file_name,
-            file_caption=file_caption
-        )
-    except Exception as e:
-        logger.error(f"Error in save_file: {e}")
-        return False
-
-
-
+logger = setup_logger(__name__)
 
 
 current_indexer: Optional['IndexMessages'] = None    
@@ -101,6 +41,29 @@ class IndexMessages:
         self.client: Client = client
         self.index_on_progress = True
         self.processed_message_ids = set()
+
+    async def save_file(self,message: Message):
+        try:
+            media = message.document or message.video
+            if not media:
+                return None
+            logger.info(f"Processing file message {message.caption or media.file_name}")
+            file_name = getattr(media, 'file_name', None)
+            file_caption = message.caption or ""
+            file_size = media.file_size
+            file_unique_id = media.file_unique_id
+            
+            return database.Files.add_file(
+                chat_id=message.chat.id,
+                message_id=message.id,
+                file_unique_id=file_unique_id,
+                file_size=file_size,
+                file_name=file_name,
+                file_caption=file_caption
+            )
+        except Exception as e:
+            logger.error(f"Error in save_file: {e}")
+            return False
 
     async def get_all_messages(self,client: Client, message: Message, chat_id: Union[int, str], end: int, start: int = 0) -> List[Message]:
         current = start
@@ -238,9 +201,7 @@ class IndexMessages:
                             if message.document or message.video:
                                 self.processed_file_messages += 1
                                 logger.info(f"Processing file message {message.id} (#{self.processed_file_messages}/{self.total_file_messages}): {message.caption or getattr(message.document or message.video, 'file_name', 'No filename')}")
-                                # result = await handle_file_task(message)
-                                task = asyncio.create_task(handle_file_task(self.client, message))
-                                result = await task
+                                result = await self.save_file(message)
                                 if result is True:
                                     self.database += 1
                                     logger.info(f"Successfully saved message {message.id} to database")
@@ -370,7 +331,8 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
         keyboard = bt.build_menu()
         await callback.message.edit("🚀 Starting indexing process...", reply_markup=keyboard)
         indexer = IndexMessages(callback.message, client)
-        await indexer.start()
+        # await indexer.start()
+        asyncio.create_task(indexer.start())
     except Exception as e:
         logger.error(f"Error in indexing callback: {e}")
         import traceback
