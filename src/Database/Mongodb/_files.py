@@ -1,4 +1,4 @@
-# src/Database/Mongodb/_settings.py
+# src/Database/Mongodb/_files.py
 
 from typing import Any, Literal
 from dataclasses import dataclass
@@ -34,3 +34,17 @@ class Files(Collection):
     def check_if_exists(self, chat_id: int, message_id: int, file_unique_id: int) -> bool:
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
+    
+    def add_file(self,chat_id: int, message_id: int, file_unique_id: str, file_size: int, file_name: str, file_caption: str):
+        saved = self.check_if_exists(chat_id,message_id,file_unique_id)
+        if not saved:
+            self.insert_one({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "file_unique_id": file_unique_id,
+                "file_size": file_size,
+                "file_name": file_name,
+                "file_caption": file_caption
+            }   )
+            return True
+        return None

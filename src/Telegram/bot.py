@@ -35,7 +35,7 @@ def start_bot():
         api_hash=API_HASH,
         tokens=TOKENS,
         plugins={'root': 'src/Telegram/Plugins'},
-        max_bots_count=4,
+        max_bots_count=1,
         logger_bot_token=LOGGER_BOT,
         log_chat_id=LOGS,
         database_url=DATABASE_URL,
