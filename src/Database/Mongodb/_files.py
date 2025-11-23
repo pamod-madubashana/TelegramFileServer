@@ -21,6 +21,7 @@ class FileData:
     file_size: int = None
     file_name: str|None = None
     file_caption: str = None
+    file_path: str = "/"  # Path where file is located, default is root
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -38,8 +39,8 @@ class Files(Collection):
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
     
-    def add_file(self,chat_id: int, message_id: int, thumbnail: str,file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str):
-        saved = self.check_if_exists(chat_id,message_id,file_unique_id)
+    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/"):
+        saved = self.check_if_exists(chat_id, message_id, file_unique_id)
         if not saved:
             self.insert_one({
                 "chat_id": chat_id,
@@ -49,8 +50,9 @@ class Files(Collection):
                 "file_unique_id": file_unique_id,
                 "file_size": file_size,
                 "file_name": file_name,
-                "file_caption": file_caption
-            }   )
+                "file_caption": file_caption,
+                "file_path": file_path  # Store file path
+            })
             return True
         return None
 
@@ -65,5 +67,6 @@ class Files(Collection):
             file_unique_id=file.get("file_unique_id"), 
             file_size=file.get("file_size"), 
             file_name=file.get("file_name"), 
-            file_caption=file.get("file_caption")
+            file_caption=file.get("file_caption"),
+            file_path=file.get("file_path", "/")  # Default to root if not set
             ) for file in files] 

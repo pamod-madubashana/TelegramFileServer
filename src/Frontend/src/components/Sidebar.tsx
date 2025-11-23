@@ -51,12 +51,12 @@ export const Sidebar = ({ currentPath, onNavigate, onDrop, files, selectedFilter
   };
 
   const filters = [
-    { name: "All Files", icon: FolderOpen, filter: "all", count: fileCounts.all },
+    { name: "Home", icon: FolderOpen, filter: "all", count: fileCounts.all },
+    { name: "Images", icon: Image, filter: "photo", count: fileCounts.photo },
     { name: "Documents", icon: FileText, filter: "document", count: fileCounts.document },
-    { name: "Photos", icon: Image, filter: "photo", count: fileCounts.photo },
     { name: "Videos", icon: Video, filter: "video", count: fileCounts.video },
     { name: "Audio", icon: Music, filter: "audio", count: fileCounts.audio },
-    { name: "Voice", icon: Mic, filter: "voice", count: fileCounts.voice },
+    { name: "Voice Messages", icon: Mic, filter: "voice", count: fileCounts.voice },
   ];
 
   return (

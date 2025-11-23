@@ -24,7 +24,7 @@ interface FileGridProps {
 interface ContextMenuState {
   x: number;
   y: number;
-  itemType: "file" | "folder";
+  itemType: "file" | "folder" | "empty";
   itemName: string;
   item: FileItem;
   index: number;
@@ -51,6 +51,7 @@ export const FileGrid = ({
 
   const handleContextMenu = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.preventDefault();
+    e.stopPropagation(); // Prevent event from bubbling to parent container
     console.log('Context menu triggered for:', item.name);
     setContextMenu({
       x: e.clientX,
@@ -117,7 +118,21 @@ export const FileGrid = ({
 
   return (
     <div className="flex-1 flex flex-col bg-background">
-      <div className="flex-1 overflow-y-auto p-4">
+      <div
+        className="flex-1 overflow-y-auto p-4"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          // Show context menu for empty area
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            itemType: "empty",
+            itemName: "",
+            item: { name: "", type: "folder", icon: "" } as FileItem,
+            index: -1,
+          });
+        }}
+      >
         {viewMode === "grid" ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4">
             {items.map((item, index) => {

@@ -13,13 +13,14 @@ import {
   FileText,
   Star,
   Archive,
+  RefreshCw,
 } from "lucide-react";
 
 interface ContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
-  itemType: "file" | "folder";
+  itemType: "file" | "folder" | "empty";
   itemName: string;
   onCopy: () => void;
   onCut: () => void;
@@ -106,72 +107,108 @@ export const ContextMenu = ({
     }
   };
 
-  const menuItems: MenuItem[] = [
-    {
-      icon: Eye,
-      label: "Open",
-      action: "open",
-      shortcut: "Enter",
-    },
-    {
-      icon: Download,
-      label: "Download",
-      action: "download",
-      disabled: true,
-    },
-    { divider: true, label: "", action: "" },
-    {
-      icon: Copy,
-      label: "Copy",
-      action: "copy",
-      shortcut: "Ctrl+C",
-    },
-    {
-      icon: Scissors,
-      label: "Cut",
-      action: "cut",
-      shortcut: "Ctrl+X",
-    },
-    ...(onPaste
-      ? [
-        {
-          icon: Clipboard,
-          label: "Paste",
-          action: "paste",
-          shortcut: "Ctrl+V",
-        } as MenuItem,
-      ]
-      : []),
-    { divider: true, label: "", action: "" },
-    {
-      icon: Pencil,
-      label: "Rename",
-      action: "rename",
-      shortcut: "F2",
-    },
-    {
-      icon: Share2,
-      label: "Share",
-      action: "share",
-      disabled: true,
-    },
-    { divider: true, label: "", action: "" },
-    {
-      icon: Trash2,
-      label: "Delete",
-      action: "delete",
-      shortcut: "Del",
-      danger: true,
-    },
-    { divider: true, label: "", action: "" },
-    {
-      icon: Info,
-      label: "Properties",
-      action: "properties",
-      shortcut: "Alt+Enter",
-      disabled: true,
-    },
-  ];
+  const menuItems: MenuItem[] = itemType === "empty"
+    ? [
+      // Empty area context menu
+      {
+        icon: FolderOpen,
+        label: "New Folder",
+        action: "new_folder",
+      },
+      { divider: true, label: "", action: "" },
+      ...(onPaste
+        ? [
+          {
+            icon: Clipboard,
+            label: "Paste",
+            action: "paste",
+            shortcut: "Ctrl+V",
+          } as MenuItem,
+        ]
+        : []),
+      { divider: true, label: "", action: "" },
+      {
+        icon: Download,
+        label: "Upload Files",
+        action: "upload",
+        disabled: true,
+      },
+      { divider: true, label: "", action: "" },
+      {
+        icon: RefreshCw,
+        label: "Refresh",
+        action: "refresh",
+        shortcut: "F5",
+        disabled: true,
+      },
+    ]
+    : [
+      // File/Folder context menu
+      {
+        icon: Eye,
+        label: "Open",
+        action: "open",
+        shortcut: "Enter",
+      },
+      {
+        icon: Download,
+        label: "Download",
+        action: "download",
+        disabled: true,
+      },
+      { divider: true, label: "", action: "" },
+      {
+        icon: Copy,
+        label: "Copy",
+        action: "copy",
+        shortcut: "Ctrl+C",
+      },
+      {
+        icon: Scissors,
+        label: "Cut",
+        action: "cut",
+        shortcut: "Ctrl+X",
+      },
+      ...(onPaste
+        ? [
+          {
+            icon: Clipboard,
+            label: "Paste",
+            action: "paste",
+            shortcut: "Ctrl+V",
+          } as MenuItem,
+        ]
+        : []),
+      { divider: true, label: "", action: "" },
+      {
+        icon: Pencil,
+        label: "Rename",
+        action: "rename",
+        shortcut: "F2",
+      },
+      {
+        icon: Share2,
+        label: "Share",
+        action: "share",
+        disabled: true,
+      },
+      { divider: true, label: "", action: "" },
+      {
+        icon: Trash2,
+        label: "Delete",
+        action: "delete",
+        shortcut: "Del",
+        danger: true,
+      },
+      { divider: true, label: "", action: "" },
+      {
+        icon: Info,
+        label: "Properties",
+        action: "properties",
+        shortcut: "Alt+Enter",
+        disabled: true,
+      },
+    ];
 
   // Adjust position to keep menu on screen
   const menuWidth = 280;

@@ -19,6 +19,7 @@ export interface ApiFile {
   file_size: number;
   file_name: string | null;
   file_caption: string | null;
+  file_path: string;  // Path where file is located
 }
 
 // Utility function to get icon based on file type

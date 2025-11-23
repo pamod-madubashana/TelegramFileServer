@@ -9,7 +9,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { toast } from "sonner";
 
 export const FileExplorer = () => {
-  const [currentPath, setCurrentPath] = useState<string[]>(["All Files"]);
+  const [currentPath, setCurrentPath] = useState<string[]>(["Home"]);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
@@ -22,19 +22,59 @@ export const FileExplorer = () => {
 
   const currentFolder = currentPath[currentPath.length - 1];
 
-  // Filter files based on selected filter and search query
-  const filteredItems = files.filter((item) => {
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
+  // Define virtual folders
+  const virtualFolders: FileItem[] = [
+    { name: "Images", type: "folder", icon: "📁", fileType: "photo" },
+    { name: "Documents", type: "folder", icon: "📁", fileType: "document" },
+    { name: "Videos", type: "folder", icon: "📁", fileType: "video" },
+    { name: "Audio", type: "folder", icon: "📁", fileType: "audio" },
+    { name: "Voice Messages", type: "folder", icon: "📁", fileType: "voice" },
+  ];
 
-    if (selectedFilter === "all") return matchesSearch;
+  // Filter files based on current path and search query
+  const getFilteredItems = (): FileItem[] => {
+    // If we're in Home and no filter is selected, show virtual folders
+    if (currentFolder === "Home" && selectedFilter === "all") {
+      const filteredFolders = virtualFolders.filter((folder) =>
+        folder.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      return filteredFolders;
+    }
 
-    // Filter by file type
-    return matchesSearch && item.fileType === selectedFilter;
-  });
+    // If we're in a specific folder or have a filter, show files
+    let filteredFiles = files;
+
+    // Filter by folder/type
+    if (currentFolder === "Images" || selectedFilter === "photo") {
+      filteredFiles = files.filter((f) => f.fileType === "photo");
+    } else if (currentFolder === "Documents" || selectedFilter === "document") {
+      filteredFiles = files.filter((f) => f.fileType === "document");
+    } else if (currentFolder === "Videos" || selectedFilter === "video") {
+      filteredFiles = files.filter((f) => f.fileType === "video");
+    } else if (currentFolder === "Audio" || selectedFilter === "audio") {
+      filteredFiles = files.filter((f) => f.fileType === "audio");
+    } else if (currentFolder === "Voice Messages" || selectedFilter === "voice") {
+      filteredFiles = files.filter((f) => f.fileType === "voice");
+    }
+
+    // Apply search filter
+    if (searchQuery) {
+      filteredFiles = filteredFiles.filter((item) =>
+        item.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    return filteredFiles;
+  };
+
+  const filteredItems = getFilteredItems();
 
   const handleNavigate = (folderName: string) => {
-    // For now, we don't have folder navigation since API returns flat list
-    // This could be extended later if needed
+    // Navigate into virtual folders
+    if (virtualFolders.some(f => f.name === folderName)) {
+      setCurrentPath([...currentPath, folderName]);
+      setSelectedFilter("all"); // Reset filter when navigating
+    }
   };
 
   const handleBack = () => {
@@ -93,7 +133,7 @@ export const FileExplorer = () => {
 
   const handleFilterChange = (filter: string) => {
     setSelectedFilter(filter);
-    setCurrentPath(["All Files"]);
+    setCurrentPath(["Home"]);
   };
 
   // Show loading state
