@@ -51,6 +51,7 @@ class IndexMessages:
             file_name = getattr(media, 'file_name', None)
             file_caption = message.caption or ""
             file_size = media.file_size
+            file_size = int(media.file_size/1024/1024)
             file_unique_id = media.file_unique_id
             
             return database.Files.add_file(
