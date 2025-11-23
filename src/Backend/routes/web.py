@@ -113,6 +113,54 @@ async def check_auth(request: Request):
 async def root():
     return {
         "app": f"{APP_NAME} Media Server",
+        "version": "1.0.0",
+        "status": "running",
+        "docs_url": "/docs"
+    }
+
+# --- API Routes ---
+@app.get("/api/files")
+async def get_all_files_route(_: bool = Depends(require_auth)):
+    try:
+        files_data = database.Files.get_all_files()
+        files_list = []
+        for f in files_data:
+            f_dict = asdict(f)
+            f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            files_list.append(f_dict)
+        return {"files": files_list}
+    except Exception as e:
+        logger.error(f"Error fetching files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/system/workloads")
+async def get_workloads(_: bool = Depends(require_auth)):
+    try:
+        return {
+        "version": "1.0.0",
+        "status": "running",
+        "docs_url": "/docs"
+    }
+
+# --- API Routes ---
+@app.get("/api/files")
+async def get_all_files_route(_: bool = Depends(require_auth)):
+    try:
+        files_data = database.Files.get_all_files()
+        files_list = []
+        for f in files_data:
+            f_dict = asdict(f)
+            f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            files_list.append(f_dict)
+        return {"files": files_list}
+    except Exception as e:
+        logger.error(f"Error fetching files: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/system/workloads")
+async def get_workloads(_: bool = Depends(require_auth)):
+    try:
+        return {
             "loads": {
                 f"bot{c + 1}": l
                 for c, (_, l) in enumerate(
