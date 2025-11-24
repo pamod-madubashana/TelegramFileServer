@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FileItem } from "@/components/types";
 
 interface ClipboardItem {
@@ -14,6 +15,7 @@ interface CopyMoveRequest {
 
 export const useFileOperations = () => {
   const [clipboard, setClipboard] = useState<ClipboardItem | null>(null);
+  const queryClient = useQueryClient();
 
   const copyItem = (item: FileItem, sourcePath: string) => {
     setClipboard({ item, operation: "copy", sourcePath });
@@ -51,6 +53,9 @@ export const useFileOperations = () => {
         if (!response.ok) {
           throw new Error("Failed to copy file");
         }
+        
+        // For copy operations, we only need to refresh the target path
+        queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
       } else {
         // Move operation
         const response = await fetch("/api/files/move", {
@@ -65,6 +70,13 @@ export const useFileOperations = () => {
         if (!response.ok) {
           throw new Error("Failed to move file");
         }
+        
+        // For move operations, refresh both source and target paths
+        queryClient.invalidateQueries({ queryKey: ['files', clipboard.sourcePath] });
+        queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
+        
+        // Force a refetch of the source path data to immediately update the UI
+        queryClient.refetchQueries({ queryKey: ['files', clipboard.sourcePath] });
       }
 
       // Clear clipboard after successful operation

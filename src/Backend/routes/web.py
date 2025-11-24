@@ -173,10 +173,11 @@ async def move_file_route(request: MoveFileRequest, _: bool = Depends(require_au
             raise HTTPException(status_code=404, detail="File not found")
         
         # Update the file's path
-        r = database.Files.update_one(
+        database.Files.update_one(
             {"_id": ObjectId(request.file_id)},
             {"$set": {"file_path": request.target_path}}
         )
+        
         return {"message": "File moved successfully"}
     except Exception as e:
         logger.error(f"Error moving file: {e}")

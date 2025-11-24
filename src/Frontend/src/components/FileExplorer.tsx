@@ -1,22 +1,25 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { FileItem } from "@/components/types";
+import { useFiles } from "@/hooks/useFiles";
+import { useFileOperations } from "@/hooks/useFileOperations";
+import { toast } from "sonner";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { FileGrid } from "./FileGrid";
-import { FileItem } from "./types";
-import { useFileOperations } from "@/hooks/useFileOperations";
-import { useFiles } from "@/hooks/useFiles";
 import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
-import { toast } from "sonner";
+import { RenameInput } from "./RenameInput";
 
 export const FileExplorer = () => {
   const [currentPath, setCurrentPath] = useState<string[]>(["Home"]);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
-  const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
+  const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
+  const queryClient = useQueryClient();
 
   // Define virtual folders
   const virtualFolders: FileItem[] = [
@@ -120,12 +123,22 @@ export const FileExplorer = () => {
   };
 
   const handleCopy = (item: FileItem) => {
-    copyItem(item, currentFolder);
+    // Construct the source path correctly
+    let sourcePath = "/";
+    if (currentPath.length > 1) {
+      sourcePath = `/${currentPath.slice(1).join('/')}`;
+    }
+    copyItem(item, sourcePath);
     toast.success(`Copied "${item.name}"`);
   };
 
   const handleCut = (item: FileItem) => {
-    cutItem(item, currentFolder);
+    // Construct the source path correctly
+    let sourcePath = "/";
+    if (currentPath.length > 1) {
+      sourcePath = `/${currentPath.slice(1).join('/')}`;
+    }
+    cutItem(item, sourcePath);
     toast.success(`Cut "${item.name}"`);
   };
 
@@ -136,6 +149,8 @@ export const FileExplorer = () => {
       if (currentPath.length > 1) {
         targetPath = `/${currentPath.slice(1).join('/')}`;
       }
+      
+      console.log("DEBUG: Pasting to", { targetPath });
       
       await pasteItem(targetPath);
       toast.success("Operation completed successfully");
@@ -202,7 +217,21 @@ export const FileExplorer = () => {
       }
       
       toast.success(`Moved "${item.name}" successfully`);
-      refetch(); // Refresh the file list
+      
+      // Source path is the current path where the file was moved from
+      let sourcePath = "/";
+      if (currentPath.length > 1) {
+        sourcePath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
+      // Refresh both source and target paths from the server
+      queryClient.invalidateQueries({ queryKey: ['files', sourcePath] });
+      queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
+      
+      // Force a refetch of the source path data to immediately update the UI
+      queryClient.refetchQueries({ queryKey: ['files', sourcePath] });
+      
+      refetch(); // Refresh the current file list
     } catch (error: any) {
       toast.error(error.message || "Failed to move file");
       console.error(error);
@@ -254,7 +283,21 @@ export const FileExplorer = () => {
       }
       
       toast.success(`Moved "${item.name}" successfully`);
-      refetch(); // Refresh the file list
+      
+      // Source path is the current path where the file was moved from
+      let sourcePath = "/";
+      if (currentPath.length > 1) {
+        sourcePath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
+      // Refresh both source and target paths from the server
+      queryClient.invalidateQueries({ queryKey: ['files', sourcePath] });
+      queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
+      
+      // Force a refetch of the source path data to immediately update the UI
+      queryClient.refetchQueries({ queryKey: ['files', sourcePath] });
+      
+      refetch(); // Refresh the current file list
     } catch (error: any) {
       toast.error(error.message || "Failed to move file");
       console.error(error);
