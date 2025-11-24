@@ -6,6 +6,7 @@ import { FileItem } from "./types";
 import { useFileOperations } from "@/hooks/useFileOperations";
 import { useFiles } from "@/hooks/useFiles";
 import { DeleteDialog } from "./DeleteDialog";
+import { NewFolderDialog } from "./NewFolderDialog";
 import { toast } from "sonner";
 
 export const FileExplorer = () => {
@@ -15,6 +16,7 @@ export const FileExplorer = () => {
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
 
   const currentFolder = currentPath[currentPath.length - 1];
 
@@ -180,10 +182,7 @@ export const FileExplorer = () => {
     }
   };
 
-  const handleNewFolder = async () => {
-    const folderName = prompt("Enter folder name:");
-    if (!folderName) return;
-
+  const handleNewFolder = async (folderName: string) => {
     try {
       const response = await fetch("/api/folders/create", {
         method: "POST",
@@ -192,19 +191,21 @@ export const FileExplorer = () => {
         },
         body: JSON.stringify({
           folderName,
-          currentPath: currentFolder,
+          currentPath: currentFolder === "Home" ? "/" : currentFolder,
         }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create folder");
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to create folder");
       }
 
       toast.success(`Folder "${folderName}" created successfully`);
+      setNewFolderDialogOpen(false);
       // Refresh the file list for current path
       refetch();
-    } catch (error) {
-      toast.error("Failed to create folder");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to create folder");
       console.error(error);
     }
   };
@@ -259,7 +260,7 @@ export const FileExplorer = () => {
           onRenameConfirm={confirmRename}
           onRenameCancel={() => setRenamingItem(null)}
           currentFolder={currentFolder}
-          onNewFolder={handleNewFolder}
+          onNewFolder={() => setNewFolderDialogOpen(true)}
           isLoading={isLoading}
         />
       </div>
@@ -270,6 +271,13 @@ export const FileExplorer = () => {
         itemType={deleteDialog?.item.type || "file"}
         onConfirm={confirmDelete}
         onCancel={() => setDeleteDialog(null)}
+      />
+      
+      <NewFolderDialog
+        open={newFolderDialogOpen}
+        currentPath={currentFolder}
+        onClose={() => setNewFolderDialogOpen(false)}
+        onConfirm={handleNewFolder}
       />
     </div>
   );
