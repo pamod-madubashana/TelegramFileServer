@@ -4,6 +4,7 @@ import { Folder, FileText, Image as ImageIcon, FileArchive } from "lucide-react"
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
+import { MediaPlayer } from "./MediaPlayer";
 
 interface FileGridProps {
   items: FileItem[];
@@ -53,6 +54,11 @@ export const FileGrid = ({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
   const [imageViewer, setImageViewer] = useState<{ url: string; fileName: string } | null>(null);
+  const [mediaPlayer, setMediaPlayer] = useState<{
+    url: string;
+    fileName: string;
+    fileType: "video" | "audio" | "voice";
+  } | null>(null);
 
   const handleContextMenu = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.preventDefault();
@@ -75,6 +81,14 @@ export const FileGrid = ({
       // Open image in viewer with file name instead of unique ID
       const imageUrl = `/dl/${encodeURIComponent(item.name)}`;
       setImageViewer({ url: imageUrl, fileName: item.name });
+    } else if ((item.fileType === "video" || item.fileType === "audio" || item.fileType === "voice") && item.file_unique_id) {
+      // Open media in player
+      const mediaUrl = `/dl/${encodeURIComponent(item.name)}`;
+      setMediaPlayer({ 
+        url: mediaUrl, 
+        fileName: item.name, 
+        fileType: item.fileType as "video" | "audio" | "voice" 
+      });
     }
   };
 
@@ -115,7 +129,7 @@ export const FileGrid = ({
       return (
         <div className="relative w-30 h-20 flex items-center justify-center">
           <img
-            src={`/api/file/${item.thumbnail || item.file_unique_id}/thumbnail`}
+            src={`/api/file/${item.thumbnail}/thumbnail`}
             alt={item.name}
             className="max-w-full max-h-full object-contain rounded"
             onError={(e) => {
@@ -291,6 +305,15 @@ export const FileGrid = ({
         />
       )}
       
+      {mediaPlayer && (
+        <MediaPlayer
+          mediaUrl={mediaPlayer.url}
+          fileName={mediaPlayer.fileName}
+          fileType={mediaPlayer.fileType}
+          onClose={() => setMediaPlayer(null)}
+        />
+      )}
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

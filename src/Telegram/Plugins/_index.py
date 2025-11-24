@@ -53,7 +53,10 @@ class IndexMessages:
                 thumbnail = media.thumbs[0].file_id if media.thumbs else None
             elif message.video:
                 file_type = "video"
-                file_name = getattr(media, 'file_name', "N/A")
+                # Generate a file name similar to photos if not available
+                file_name = getattr(media, 'file_name', None)
+                if not file_name or file_name == "N/A":
+                    file_name = f"Video_{media.file_unique_id}.mp4"
                 thumbnail = media.thumbs[0].file_id if media.thumbs else None
             elif message.photo:
                 file_type = "photo"
