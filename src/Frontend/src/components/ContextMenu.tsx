@@ -28,6 +28,7 @@ interface ContextMenuProps {
   onDelete: () => void;
   onRename: () => void;
   onNewFolder?: () => void;
+  onDownload?: () => void;
 }
 
 interface MenuItem {
@@ -52,6 +53,7 @@ export const ContextMenu = ({
   onDelete,
   onRename,
   onNewFolder,
+  onDownload,
 }: ContextMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -106,6 +108,9 @@ export const ContextMenu = ({
       case "new_folder":
         onNewFolder?.();
         break;
+      case "download":
+        onDownload?.();
+        break;
       default:
         console.log(`${action} on ${itemName}`);
         onClose();
@@ -159,7 +164,6 @@ export const ContextMenu = ({
         icon: Download,
         label: "Download",
         action: "download",
-        disabled: true,
       },
       { divider: true, label: "", action: "" },
       {

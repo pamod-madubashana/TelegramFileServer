@@ -345,6 +345,29 @@ export const FileExplorer = () => {
     }
   };
 
+  const handleDownload = (item: FileItem) => {
+    try {
+      // Create the download URL using the file name
+      const downloadUrl = `/dl/${encodeURIComponent(item.name)}`;
+      
+      // Create a temporary anchor element
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = item.name; // Set the download attribute to the file name
+      link.style.display = 'none';
+      
+      // Add to DOM, click and remove
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast.success(`Downloading "${item.name}"`);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to download file");
+      console.error(error);
+    }
+  };
+
   // Create a separate function for the Sidebar's onDrop
   const handleSidebarDrop = async (item: FileItem, targetFolderName: string) => {
     try {
@@ -514,6 +537,7 @@ export const FileExplorer = () => {
           onDelete={handleDelete}
           onRename={handleRename}
           onMove={handleMove}
+          onDownload={handleDownload}
           renamingItem={renamingItem}
           onRenameConfirm={confirmRename}
           onRenameCancel={() => setRenamingItem(null)}

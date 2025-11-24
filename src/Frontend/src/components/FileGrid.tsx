@@ -18,6 +18,7 @@ interface FileGridProps {
   onDelete: (item: FileItem, index: number) => void;
   onRename: (item: FileItem, index: number) => void;
   onMove: (item: FileItem, targetFolder: FileItem) => void; // This is correct now
+  onDownload: (item: FileItem) => void;
   renamingItem: { item: FileItem; index: number } | null;
   onRenameConfirm: (newName: string) => void;
   onRenameCancel: () => void;
@@ -45,6 +46,7 @@ export const FileGrid = ({
   onDelete,
   onRename,
   onMove,
+  onDownload,
   renamingItem,
   onRenameConfirm,
   onRenameCancel,
@@ -313,6 +315,10 @@ export const FileGrid = ({
             onNewFolder();
             setContextMenu(null);
           } : undefined}
+          onDownload={() => {
+            onDownload(contextMenu.item);
+            setContextMenu(null);
+          }}
         />
       )}
     </div>
