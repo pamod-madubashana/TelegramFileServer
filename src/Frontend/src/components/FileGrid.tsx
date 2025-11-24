@@ -107,7 +107,7 @@ export const FileGrid = ({
     // If item has a thumbnail, try to show it
     if (item.thumbnail) {
       return (
-        <div className="relative w-12 h-12 flex items-center justify-center">
+        <div className="relative w-30 h-20 flex items-center justify-center">
           <img
             src={`/api/file/${item.thumbnail}/thumbnail`}
             alt={item.name}
