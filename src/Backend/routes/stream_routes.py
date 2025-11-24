@@ -325,8 +325,6 @@ async def stream_handler(request: Request, file_name: str):
         print(f"ValueError converting file data: {e}")
         raise HTTPException(status_code=404, detail="Invalid file data")
     except Exception as e:
-        
-        traceback.print_exc()
         print(f"Exception looking up file with name {decoded_file_name}: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
     
@@ -338,7 +336,6 @@ async def stream_handler(request: Request, file_name: str):
         logger.info(f"File found: {file}")
         file_hash = file.file_unique_id[:6]
     except Exception as e:
-        traceback.print_exc()
         print(f"Exception getting file from Telegram: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
 
