@@ -73,13 +73,12 @@ export const FileExplorer = () => {
     } else if (currentFolder === "Voice Messages" || selectedFilter === "voice") {
       filteredFiles = files.filter((f) => f.fileType === "voice");
     } else if (currentFolder !== "Home") {
-      // Check if we're in a user-created folder
-      const isUserFolder = files.some(f => (f.type === "folder" || f.fileType === "folder") && f.name === currentFolder);
-      if (isUserFolder) {
-        // Filter files that belong to this folder (by file_path or folder association)
-        // For now, show empty array since files don't have file_path set yet
-        // TODO: When files are moved to folders, filter by file_path === currentFolder
-        filteredFiles = files.filter((f) => f.file_path === currentFolder);
+      // For user-created folders, we just show the files returned by the API
+      // The API already filters by path, so we don't need to filter here
+      // We only need to check if it's NOT a virtual folder
+      const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
+      if (!isVirtualFolder) {
+        filteredFiles = files;
       }
     }
 
@@ -162,7 +161,23 @@ export const FileExplorer = () => {
 
   const handleFilterChange = (filter: string) => {
     setSelectedFilter(filter);
-    setCurrentPath(["Home"]);
+
+    // Map filter to virtual folder name to ensure we fetch the correct files
+    const filterToFolder: Record<string, string> = {
+      "photo": "Images",
+      "document": "Documents",
+      "video": "Videos",
+      "audio": "Audio",
+      "voice": "Voice Messages",
+      "all": "Home"
+    };
+
+    const folderName = filterToFolder[filter];
+    if (folderName && folderName !== "Home") {
+      setCurrentPath(["Home", folderName]);
+    } else {
+      setCurrentPath(["Home"]);
+    }
   };
 
   const handleNewFolder = async () => {
