@@ -459,14 +459,6 @@ export const FileExplorer = () => {
         />
       </div>
 
-      <DeleteDialog
-        open={!!deleteDialog && !showDeleteConfirm}
-        itemName={deleteDialog?.item.name || ""}
-        itemType={deleteDialog?.item.type || "file"}
-        onConfirm={confirmDelete}
-        onCancel={cancelDelete}
-      />
-      
       <DeleteConfirmDialog
         open={!!deleteDialog}
         itemName={deleteDialog?.item.name || ""}
@@ -474,7 +466,7 @@ export const FileExplorer = () => {
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
       />
-    
+
       <NewFolderDialog
         open={newFolderDialogOpen}
         currentPath={currentApiPath}  // Pass the full path, not just the folder name
