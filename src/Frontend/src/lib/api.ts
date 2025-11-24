@@ -11,6 +11,7 @@ export interface ApiFile {
     file_size: number;
     file_name: string | null;
     file_caption: string | null;
+    file_path: string;  // Path where file is located
 }
 
 export interface FilesResponse {
@@ -18,8 +19,8 @@ export interface FilesResponse {
 }
 
 export const api = {
-    async fetchFiles(): Promise<FilesResponse> {
-        const response = await fetch(`${API_BASE_URL}/files`, {
+    async fetchFiles(path: string = '/'): Promise<FilesResponse> {
+        const response = await fetch(`${API_BASE_URL}/files?path=${encodeURIComponent(path)}`, {
             credentials: 'include', // Include cookies for session-based auth
         });
 
