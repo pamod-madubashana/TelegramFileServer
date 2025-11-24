@@ -24,6 +24,8 @@ export const DeleteDialog = ({
   onConfirm,
   onCancel,
 }: DeleteDialogProps) => {
+  // This dialog is now only used for backward compatibility
+  // The main delete confirmation uses DeleteConfirmDialog
   return (
     <AlertDialog open={open} onOpenChange={(open) => !open && onCancel()}>
       <AlertDialogContent>

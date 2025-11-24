@@ -5,12 +5,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
-from bson import ObjectId  # Add this import for ObjectId
+from bson import ObjectId
 import sys
 import io
 import tempfile
 import logging
 import re
+import os
 from typing import List, Dict, Any
 
 # Set up logger to match your application's logging format
@@ -205,6 +206,49 @@ async def copy_file_route(request: CopyFileRequest, _: bool = Depends(require_au
         return {"message": "File copied successfully", "new_file_id": str(new_file_data["_id"])}
     except Exception as e:
         logger.error(f"Error copying file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class DeleteFileRequest(BaseModel):
+    file_id: str
+
+@app.post("/api/files/delete")
+async def delete_file_route(request: DeleteFileRequest, _: bool = Depends(require_auth)):
+    try:
+        # Get the file by ID to check if it exists
+        file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Check if this is a folder
+        if file_data.get("file_type") == "folder":
+            # For folders, we also need to delete all files inside the folder
+            folder_path = file_data.get("file_path", "/")
+            folder_name = file_data.get("file_name", "")
+            
+            # Construct the full folder path
+            if folder_path == "/":
+                full_folder_path = f"/{folder_name}"
+            else:
+                full_folder_path = f"{folder_path}/{folder_name}"
+            
+            # Delete all files in the folder
+            database.Files.delete_many({"file_path": full_folder_path})
+            
+            # Also delete any subfolders and files inside this folder
+            # Delete items that are inside this folder (path starts with full_folder_path + "/")
+            database.Files.delete_many({
+                "file_path": {"$regex": f"^{re.escape(full_folder_path)}/"}
+            })
+        
+        # Delete the file/folder itself
+        result = database.Files.delete_one({"_id": ObjectId(request.file_id)})
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        return {"message": "Item deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/system/workloads")

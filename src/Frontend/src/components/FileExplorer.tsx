@@ -10,6 +10,7 @@ import { FileGrid } from "./FileGrid";
 import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { RenameInput } from "./RenameInput";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 
 export const FileExplorer = () => {
   const [currentPath, setCurrentPath] = useState<string[]>(["Home"]);
@@ -161,15 +162,58 @@ export const FileExplorer = () => {
     }
   };
 
-  const handleDelete = (item: FileItem, index: number) => {
+  const handleDelete = async (item: FileItem, index: number) => {
+    // Set the item to be deleted and show custom confirmation dialog
     setDeleteDialog({ item, index });
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteDialog) return;
+    
+    const { item, index } = deleteDialog;
+    
+    try {
+      // Construct the request
+      const request = {
+        file_id: item.id || ""
+      };
+      
+      const response = await fetch("/api/files/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(request),
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to delete file");
+      }
+      
+      toast.success(`Deleted "${item.name}" successfully`);
+      
+      // Get the current path for cache invalidation
+      let currentApiPath = "/";
+      if (currentPath.length > 1) {
+        currentApiPath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
+      // Refresh the current path data to immediately update the UI
+      queryClient.invalidateQueries({ queryKey: ['files', currentApiPath] });
+      queryClient.refetchQueries({ queryKey: ['files', currentApiPath] });
+      
+      refetch(); // Refresh the file list
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete file");
+      console.error(error);
+    } finally {
+      // Close the delete dialog
+      setDeleteDialog(null);
+    }
+  };
 
-    // Delete functionality disabled for now - requires backend API
-    toast.info("Delete functionality coming soon");
+  const cancelDelete = () => {
     setDeleteDialog(null);
   };
 
@@ -416,13 +460,21 @@ export const FileExplorer = () => {
       </div>
 
       <DeleteDialog
+        open={!!deleteDialog && !showDeleteConfirm}
+        itemName={deleteDialog?.item.name || ""}
+        itemType={deleteDialog?.item.type || "file"}
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
+      
+      <DeleteConfirmDialog
         open={!!deleteDialog}
         itemName={deleteDialog?.item.name || ""}
         itemType={deleteDialog?.item.type || "file"}
         onConfirm={confirmDelete}
-        onCancel={() => setDeleteDialog(null)}
+        onCancel={cancelDelete}
       />
-      
+    
       <NewFolderDialog
         open={newFolderDialogOpen}
         currentPath={currentApiPath}  // Pass the full path, not just the folder name
