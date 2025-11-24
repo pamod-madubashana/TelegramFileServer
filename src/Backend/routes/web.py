@@ -211,6 +211,24 @@ async def copy_file_route(request: CopyFileRequest, _: bool = Depends(require_au
 class DeleteFileRequest(BaseModel):
     file_id: str
 
+class RenameFileRequest(BaseModel):
+    file_id: str
+    new_name: str
+
+@app.post("/api/files/rename")
+async def rename_file_route(request: RenameFileRequest, _: bool = Depends(require_auth)):
+    try:
+        # Rename the file/folder
+        success = database.Files.rename_file(request.file_id, request.new_name)
+        
+        if success:
+            return {"message": "Item renamed successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+    except Exception as e:
+        logger.error(f"Error renaming file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/files/delete")
 async def delete_file_route(request: DeleteFileRequest, _: bool = Depends(require_auth)):
     try:

@@ -221,12 +221,47 @@ export const FileExplorer = () => {
     setRenamingItem({ item, index });
   };
 
-  const confirmRename = (newName: string) => {
+  const confirmRename = async (newName: string) => {
     if (!renamingItem) return;
-
-    // Rename functionality disabled for now - requires backend API
-    toast.info("Rename functionality coming soon");
-    setRenamingItem(null);
+    
+    try {
+      // Call the rename API
+      const response = await fetch("/api/files/rename", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          file_id: renamingItem.item.id,
+          new_name: newName
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to rename item");
+      }
+      
+      toast.success(`Renamed "${renamingItem.item.name}" to "${newName}" successfully`);
+      
+      // Get the current path for cache invalidation
+      let currentApiPath = "/";
+      if (currentPath.length > 1) {
+        currentApiPath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
+      // Refresh the current path data to immediately update the UI
+      queryClient.invalidateQueries({ queryKey: ['files', currentApiPath] });
+      queryClient.refetchQueries({ queryKey: ['files', currentApiPath] });
+      
+      refetch(); // Refresh the file list
+    } catch (error: any) {
+      toast.error(error.message || "Failed to rename item");
+      console.error(error);
+    } finally {
+      setRenamingItem(null);
+    }
   };
 
   const handleMove = async (item: FileItem, targetFolder: FileItem) => {

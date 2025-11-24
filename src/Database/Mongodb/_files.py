@@ -154,3 +154,57 @@ class Files(Collection):
             file_caption=file_data.get("file_caption"),
             file_path=file_data.get("file_path", "/")
         )
+
+    def rename_file(self, file_id: str, new_name: str) -> bool:
+        """Rename a file or folder"""
+        from bson import ObjectId
+        
+        # Find the file/folder by ID
+        file_data = self.find_one({"_id": ObjectId(file_id)})
+        if not file_data:
+            return False
+            
+        # Update the file/folder name
+        result = self.update_one(
+            {"_id": ObjectId(file_id)},
+            {"$set": {"file_name": new_name}}
+        )
+        
+        # If this is a folder, we need to update the paths of all contained files
+        if file_data.get("file_type") == "folder":
+            old_path = file_data.get("file_path", "/")
+            folder_name = file_data.get("file_name", "")
+            
+            # Construct the old full path and new full path
+            # The folder's full path is its parent path + "/" + folder name
+            if old_path == "/":
+                old_full_path = f"/{folder_name}"
+            else:
+                old_full_path = f"{old_path}/{folder_name}"
+                
+            # For the new path, we keep the same parent path but change the folder name
+            if old_path == "/":
+                new_full_path = f"/{new_name}"
+            else:
+                new_full_path = f"{old_path}/{new_name}"
+            
+            # Update all files that are directly in this folder
+            self.update_many(
+                {"file_path": old_full_path},
+                {"$set": {"file_path": new_full_path}}
+            )
+            
+            # Update files in subfolders (paths that start with old_full_path + "/")
+            import re
+            regex_pattern = f"^{re.escape(old_full_path)}/"
+            
+            # Find all files with paths starting with old_full_path + "/"
+            subfolder_files = self.find({"file_path": {"$regex": regex_pattern}})
+            for file in subfolder_files:
+                new_file_path = file["file_path"].replace(old_full_path, new_full_path, 1)
+                self.update_one(
+                    {"_id": file["_id"]},
+                    {"$set": {"file_path": new_file_path}}
+                )
+        
+        return result.modified_count > 0
