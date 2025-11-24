@@ -3,7 +3,7 @@
 START_MSG = """
 <b>Hello {user_mention} !!!</b>
 
-🎬 <b>Welcome to Serandip-Prime!</b>
+🎬 <b>Welcome to Telegram File Server!</b>
 Your personal movie vault, right here on Telegram.
 
 🍿 Browse. Search. Streamline.

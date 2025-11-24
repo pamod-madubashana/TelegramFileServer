@@ -24,7 +24,7 @@ class User(Client):
 
     async def create_client(self):
         super().__init__(
-            name="Serandip-Prime",
+            name="Telegram-File-Server",
             api_id=API_ID,
             api_hash=API_HASH,
             session_string=self.session,

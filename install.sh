@@ -6,7 +6,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PATH="$PROJECT_DIR/.venv"
 REQUIREMENTS="$PROJECT_DIR/requirements.txt"
 MAIN_FILE="$PROJECT_DIR/__main__.py"
-SERVICE_NAME="serandip-prime"
+SERVICE_NAME="telegram-file-server"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 
 # Create venv if not exists
@@ -34,7 +34,7 @@ create_service() {
     # Create service file
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=Serandip-prime Telegram Bot
+Description=Telegram File Server
 After=network.target
 Wants=network-online.target
 
@@ -94,7 +94,7 @@ install_prime_command() {
     sudo tee "/usr/local/bin/prime" > /dev/null <<'EOF'
 #!/usr/bin/env python3
 """
-Prime - Easy command line interface for Serandip Prime Telegram Bot
+Prime - Easy command line interface for Telegram File Server
 """
 
 import sys
@@ -103,7 +103,7 @@ import os
 import signal
 import time
 
-SERVICE_NAME = "serandip-prime"
+SERVICE_NAME = "telegram-file-server"
 
 def run_command(cmd):
     """Run a systemctl command and print the result"""
@@ -142,7 +142,7 @@ def send_sigint_to_service():
 
 def show_help():
     """Display help information"""
-    help_text = """Prime - Serandip Prime Telegram Bot Manager
+    help_text = """Prime - Telegram File Server Manager
 
 Usage: prime [command]
 
@@ -171,11 +171,11 @@ def main():
     if command == "help":
         show_help()
     elif command == "start":
-        print("Starting Serandip Prime service...")
+        print("Starting Telegram File Server service...")
         run_command(f"systemctl start {SERVICE_NAME}")
         run_command(f"systemctl status {SERVICE_NAME} --no-pager")
     elif command == "stop":
-        print("Stopping Serandip Prime service (sending SIGINT)...")
+        print("Stopping Telegram File Server service (sending SIGINT)...")
         if send_sigint_to_service():
             # Wait for graceful shutdown (up to 30 seconds)
             print("Waiting for graceful shutdown...")
@@ -195,7 +195,7 @@ def main():
             # Fallback to systemctl stop if SIGINT fails
             run_command(f"systemctl stop {SERVICE_NAME}")
     elif command == "restart":
-        print("Restarting Serandip Prime service...")
+        print("Restarting Telegram File Server service...")
         print("Stopping service (sending SIGINT)...")
         if send_sigint_to_service():
             # Wait for graceful shutdown (up to 30 seconds)
@@ -220,7 +220,7 @@ def main():
     elif command == "status":
         run_command(f"systemctl status {SERVICE_NAME} --no-pager")
     elif command == "logs":
-        print("Following Serandip Prime logs (Press Ctrl+C to exit)...")
+        print("Following Telegram File Server logs (Press Ctrl+C to exit)...")
         try:
             subprocess.run(f"journalctl -u {SERVICE_NAME} -f -o cat", shell=True)
         except KeyboardInterrupt:

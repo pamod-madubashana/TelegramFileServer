@@ -110,7 +110,7 @@ async def cmd_command(client: Client, message: Message):
 
 async def run_shell_task(client:Client, message: Message):
     result = None
-    default_path = "root@serandip:~/Telegram/Bots/Serandip-prime#"
+    default_path = "root@server:~/Telegram/Bots/Telegram-File-Server#"
     def get_path():
         try:
             cwd = os.getcwd()
@@ -120,7 +120,7 @@ async def run_shell_task(client:Client, message: Message):
             except subprocess.CalledProcessError:
                 return default_path
         if cwd:
-            return f"{cwd.replace('/root/', 'root@serandip:~/')}#"
+            return f"{cwd.replace('/root/', 'root@server:~/')}#"
         return default_path
     output = ""
     while True:

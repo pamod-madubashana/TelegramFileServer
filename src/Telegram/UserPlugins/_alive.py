@@ -24,7 +24,7 @@ class ChannelCreater:
         self.client = user
 
     async def create_channel(self,channel_name: str):
-        self.channel = await self.client.create_channel(channel_name, "Channel for Serandip Bot Updates")
+        self.channel = await self.client.create_channel(channel_name, "Channel for Telegram File Server Bot Updates")
 
     async def add_members(self,user_ids: list[int]):
         return await self.client.add_chat_members(chat_id=self.channel.id, user_ids=user_ids)

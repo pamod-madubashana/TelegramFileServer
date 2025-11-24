@@ -14,7 +14,7 @@ themoviedb==1.0.2
 colorama==0.4.6
 requests==2.32.4
 RapidFuzz==3.14.1
-d4rktg==1.5.3
+d4rktg==1.5.7
 psutil==7.1.0
 aiohttp-session
 python-multipart
