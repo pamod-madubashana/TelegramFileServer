@@ -1,5 +1,6 @@
 export interface FileItem {
   id?: string;
+  file_unique_id?: string;
   name: string;
   type: "file" | "folder";
   icon: string;
@@ -65,6 +66,7 @@ export const apiFileToFileItem = (apiFile: ApiFile): FileItem => {
 
   return {
     id: apiFile.id,
+    file_unique_id: apiFile.file_unique_id,
     name: fileName,
     type: 'file',
     icon: getFileIcon(apiFile.file_type, fileName),

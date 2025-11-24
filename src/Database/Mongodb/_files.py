@@ -141,3 +141,22 @@ class Files(Collection):
             "file_path": desktop_ini_path
         })
         return True
+
+    def get_file_by_unique_id(self, file_unique_id: str):
+        """Get a file by its unique ID"""
+        file_data = self.find_one({"file_unique_id": file_unique_id})
+        if not file_data:
+            return None
+        
+        return FileData(
+            id=file_data.get("_id"), 
+            chat_id=file_data.get("chat_id"), 
+            message_id=file_data.get("message_id"), 
+            file_type=file_data.get("file_type"),
+            thumbnail=file_data.get("thumbnail"), 
+            file_unique_id=file_data.get("file_unique_id"), 
+            file_size=file_data.get("file_size"), 
+            file_name=file_data.get("file_name"), 
+            file_caption=file_data.get("file_caption"),
+            file_path=file_data.get("file_path", "/")
+        )

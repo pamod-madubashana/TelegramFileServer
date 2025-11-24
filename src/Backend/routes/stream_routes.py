@@ -1,28 +1,36 @@
+import os
+import sys
 import math
-import secrets
-import mimetypes
-from typing import Tuple, Dict, Union
-from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
-
+from venv import logger
 import zlib
 import json
 import asyncio
+import secrets
+import mimetypes
+import traceback
+
+from pathlib import Path
+from typing import Tuple, Dict, Union
+from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi.responses import StreamingResponse, JSONResponse
 from concurrent.futures import ThreadPoolExecutor
- 
+
 from pyrogram import Client
 from pyrogram import raw
 from pyrogram import utils
 from pyrogram.errors import AuthBytesInvalid
 from pyrogram.session import Session , Auth
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
-
-from src.Database.Mongodb import database
+from src.Database import database
 
 from d4rk.Logs import setup_logger
 
 
 from src.Config import APP_NAME
+
+current_dir = Path(__file__).parent
+parent_dir = current_dir.parent
+sys.path.append(str(parent_dir))
 
 LOGGER = setup_logger(__name__)
 
@@ -95,7 +103,7 @@ async def get_file_ids(client: Client, chat_id: int, message_id: int) -> FileId:
         if not message:
             return None
             
-        file = message.video or message.document or message.audio or message.voice
+        file = message.video or message.document or message.audio or message.voice or message.photo
         if not file:
             return None
             
@@ -267,14 +275,16 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
     return from_bytes, until_bytes
 
 
-@router.get("/dl/{id}")
-@router.head("/dl/{id}")
-@router.get("/dl/{id}/{filename}")
-@router.head("/dl/{id}/{filename}")
-async def stream_handler(request: Request, id: str, filename: str = None):
+@router.get("/dl/{file_name:path}")
+@router.head("/dl/{file_name:path}")
+async def stream_handler(request: Request, file_name: str):
     # For download, explicitly set is_watch to False
     request.state.is_watch = False
     # Handle download request
+    
+    # Decode URL encoded file name
+    import urllib.parse
+    decoded_file_name = urllib.parse.unquote(file_name)
     
     # Get bot manager from app state
     bot_manager = request.app.state.bot_manager if hasattr(request.app.state, 'bot_manager') else None
@@ -285,61 +295,57 @@ async def stream_handler(request: Request, id: str, filename: str = None):
     if not client:
         raise HTTPException(status_code=500, detail="No available bot clients")
     
-    # Look up the file in the database using the file unique ID
+    # Look up the file in the database using the file name
     try:
+        # Search for the file in the Files collection by file name
+        # First try exact match
+        file_data = database.Files.find_one({"file_name": decoded_file_name})
         
-        # Search for the file in all movie resolutions
-        file_data = database.Movies.get_movie_file_by_id(id)
-        if not file_data or not file_data.file_data or len(file_data.file_data) == 0:
-            print(f"File not found in database for ID: {id}")
+        # If not found, try with path variations
+        if not file_data:
+            # Try with leading slash
+            file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/"})
+        
+        if not file_data:
+            print(f"File not found in database for name: {decoded_file_name}")
             raise HTTPException(status_code=404, detail="File not found")
         
-        # If a specific filename is requested, find the matching file_data entry
-        file_info = None
-        if filename:
-            for fd in file_data.file_data:
-                if fd.filename == filename:
-                    file_info = fd
-                    break
+        # Get file unique ID for Telegram lookup
+        file_unique_id = file_data.get("file_unique_id")
+        chat_id = file_data.get("chat_id")
+        message_id = file_data.get("message_id")
         
-        # If no specific filename matched or no filename provided, use the first file_data
-        if not file_info:
-            file_info = file_data.file_data[0]
-            
-        chat_id = file_info.chat_id
-        message_id = file_info.message_id
-        
-        if not chat_id or not message_id:
+        if not file_unique_id or not chat_id or not message_id:
             raise HTTPException(status_code=404, detail="File not found")
         
         # Reconstruct the full chat_id with -100 prefix if needed
-        if chat_id > 0:
-            full_chat_id = -1000000000000 + chat_id
-        else:
-            full_chat_id = chat_id
             
     except ValueError as e:
         # Handle case where ID cannot be converted to integer
-        print(f"ValueError converting ID {id} to integer: {e}")
-        raise HTTPException(status_code=404, detail="Invalid file ID format")
+        print(f"ValueError converting file data: {e}")
+        raise HTTPException(status_code=404, detail="Invalid file data")
     except Exception as e:
-        print(f"Exception looking up file with ID {id}: {e}")
+        
+        traceback.print_exc()
+        print(f"Exception looking up file with name {decoded_file_name}: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
     
     try:
-        message = await client.get_messages(full_chat_id, message_id)
-        file = message.video or message.document
+        message = await client.get_messages(chat_id, message_id)
+        file = message.video or message.document or message.photo or message.audio or message.voice
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
+        logger.info(f"File found: {file}")
         file_hash = file.file_unique_id[:6]
     except Exception as e:
+        traceback.print_exc()
         print(f"Exception getting file from Telegram: {e}")
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
 
     return await media_streamer(
         request,
         client=client,
-        chat_id=full_chat_id,
+        chat_id=chat_id,
         id=message_id,
         file=file,
         secure_hash=file_hash
@@ -449,13 +455,7 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
         
         if not chat_id or not message_id:
             raise HTTPException(status_code=404, detail="File not found")
-        
-        # Reconstruct the full chat_id with -100 prefix if needed
-        if chat_id > 0:
-            full_chat_id = -1000000000000 + chat_id
-        else:
-            full_chat_id = chat_id
-            
+                    
     except ValueError as e:
         # Handle case where ID cannot be converted to integer
         print(f"ValueError converting ID {id} to integer: {e}")
@@ -465,8 +465,8 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
         raise HTTPException(status_code=404, detail="File not found or inaccessible")
     
     try:
-        message = await client.get_messages(full_chat_id, message_id)
-        file = message.video or message.document
+        message = await client.get_messages(chat_id, message_id)
+        file = message.video or message.document or message.audio or message.voice or message.photo
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
         file_hash = file.file_unique_id[:6]
@@ -477,99 +477,67 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
     return await media_streamer(
         request,
         client=client,
-        chat_id=full_chat_id,
+        chat_id=chat_id,
         id=message_id,
         file=file,
         secure_hash=file_hash
     )
 
 
-@router.get("/watch/{id}")
-async def watch_handler(request: Request, id: str, quality: str = None):
+@router.get("/watch/{file_name:path}")
+async def watch_handler(request: Request, file_name: str):
     # Check if this is a request for the video content (not the player page)
     # We can detect this by checking if the Accept header contains video/ but NOT text/html
     # This prevents browsers from accidentally triggering streaming when they want the player page
     accept_header = request.headers.get("Accept", "")
     
+    # Decode URL encoded file name
+    import urllib.parse
+    decoded_file_name = urllib.parse.unquote(file_name)
+    
     # If the request is specifically asking for video content and NOT html, stream it
     if "video/" in accept_header and "text/html" not in accept_header:
         # This is a request for the video content, stream it
         request.state.is_watch = True
-        return await stream_handler_for_watch(request, id)
+        return await stream_handler(request, file_name)
     # Also check for direct range requests which are typically video streaming requests
     elif request.headers.get("Range"):
         # This is a range request, definitely a streaming request
         request.state.is_watch = True
-        return await stream_handler_for_watch(request, id)
+        return await stream_handler(request, file_name)
     else:
         # This is a request for the video player page
-        # Look up the file in the database using the file unique ID
+        # Look up the file in the database using the file name
         try:
-            # Search for the file in all movie resolutions
-            file_data = database.Movies.get_movie_file_by_id(id)
-            if not file_data or not file_data.file_data or len(file_data.file_data) == 0:
-                print(f"File not found in database for ID: {id}")
+            # Search for the file in the Files collection by file name
+            # First try exact match
+            file_data = database.Files.find_one({"file_name": decoded_file_name})
+            
+            # If not found, try with path variations
+            if not file_data:
+                # Try with leading slash
+                file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/"})
+            
+            if not file_data:
+                print(f"File not found in database for name: {decoded_file_name}")
                 raise HTTPException(status_code=404, detail="File not found")
             
-            # Get the first file data (should be the main file)
-            file_info = file_data.file_data[0]
-            file_name = file_info.filename or f"{secrets.token_hex(2)}.unknown"
-            mime_type = resolve_mime_type(file_name)
+            file_name_str = file_data.get("file_name") or f"{secrets.token_hex(2)}.unknown"
+            mime_type = resolve_mime_type(file_name_str)
             
             # Create a title from the file information
-            title = file_data.display_name or "Unknown Movie"
-            
-            # Get all available qualities for this movie
-            qualities = []
-            qualities_data = database.Movies.get_movie_qualities_by_id(id)
-            print(f"Qualities data for file ID {id}: {qualities_data}")  # Debug print
-            
-            # Create a list of unique resolutions with their file IDs
-            resolution_map = {}
-            for quality_data in qualities_data:
-                resolution = quality_data["resolution"]
-                # Always take the first file ID for each resolution
-                if resolution not in resolution_map:
-                    resolution_map[resolution] = quality_data["file_id"]
-            
-            # Convert to the format expected by the template
-            for resolution, file_id in resolution_map.items():
-                qualities.append({
-                    "resolution": resolution,
-                    "file_id": file_id
-                })
-            
-            # Sort qualities by resolution (higher resolution first)
-            def resolution_sort_key(quality):
-                resolution = quality["resolution"].upper()
-                # Extract numeric part from resolution string
-                import re
-                match = re.search(r'(\d+)', resolution)
-                if match:
-                    return int(match.group(1))
-                # Handle non-numeric resolutions
-                priority_map = {
-                    'SD': 1, 'HD': 3, 'FHD': 5, 'UHD': 9
-                }
-                return priority_map.get(resolution, 0)
-            
-            qualities.sort(key=resolution_sort_key, reverse=True)
-            
-            print(f"Available qualities: {qualities}")  # Debug print
-            
-            # Get app name from config or environment
-            
-            # Return the video player template
+            title = file_data.get("file_name") or "Unknown File"
+
             return templates.TemplateResponse("video_player.html", {
                 "request": request,
-                "id": id,
+                "id": file_data.get("file_unique_id"),  # Use unique ID for player
                 "title": f"{title}",
                 "mime_type": mime_type,  # Default to MP4, will be overridden by browser
-                "qualities": qualities,  # Pass available qualities to template
+                "qualities": [],  # No qualities for simple file server
                 "app_name": APP_NAME  # Pass app name to template
             })
         except Exception as e:
-            print(f"Exception looking up file with ID {id}: {e}")
+            print(f"Exception looking up file with name {decoded_file_name}: {e}")
             raise HTTPException(status_code=404, detail="File not found or inaccessible")
 
 
@@ -708,9 +676,18 @@ async def media_streamer(
     # Check if this is a watch request
     is_watch = hasattr(request.state, 'is_watch') and request.state.is_watch
     
-    file_name = file.file_name or f"{secrets.token_hex(2)}.unknown"
-    mime_type = file.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+
+    if hasattr(file, 'file_name'):
+        file_name = file.file_name
+    elif hasattr(file, "width"):
+        file_name = f"Photo_{file.file_unique_id}.jpg"
+    else: 
+        file_name = f"Media_{file.file_unique_id}"
     
+    if hasattr(file, 'mime_type'):
+        mime_type = file.mime_type
+    else:
+        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
     # For watch requests, try to use a more browser-friendly MIME type if needed
     if is_watch and mime_type == "application/octet-stream":
         # If we can't determine the MIME type, try to guess based on file extension
@@ -735,7 +712,7 @@ async def media_streamer(
             elif ext in ("wmv",):
                 mime_type = "video/x-ms-wmv"
     
-    if not file.file_name and "/" in mime_type:
+    if not file_name and "/" in mime_type:
         file_name = f"{secrets.token_hex(2)}.{mime_type.split('/')[1]}"
 
     content_disposition = 'inline; filename="{}"'.format(file_name) if is_watch else 'attachment; filename="{}"'.format(file_name)

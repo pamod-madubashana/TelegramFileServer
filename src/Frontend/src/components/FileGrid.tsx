@@ -3,6 +3,7 @@ import { FileItem } from "./types";
 import { Folder, FileText, Image as ImageIcon, FileArchive } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
+import { ImageViewer } from "./ImageViewer";
 
 interface FileGridProps {
   items: FileItem[];
@@ -51,6 +52,7 @@ export const FileGrid = ({
 }: FileGridProps & { isLoading?: boolean }) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
+  const [imageViewer, setImageViewer] = useState<{ url: string; fileName: string } | null>(null);
 
   const handleContextMenu = (e: React.MouseEvent, item: FileItem, index: number) => {
     e.preventDefault();
@@ -69,6 +71,10 @@ export const FileGrid = ({
   const handleItemClick = (item: FileItem) => {
     if (item.type === "folder") {
       onNavigate(item.name);
+    } else if (item.fileType === "photo" && item.file_unique_id) {
+      // Open image in viewer with file name instead of unique ID
+      const imageUrl = `/dl/${encodeURIComponent(item.name)}`;
+      setImageViewer({ url: imageUrl, fileName: item.name });
     }
   };
 
@@ -109,7 +115,7 @@ export const FileGrid = ({
       return (
         <div className="relative w-30 h-20 flex items-center justify-center">
           <img
-            src={`/api/file/${item.thumbnail}/thumbnail`}
+            src={`/api/file/${item.thumbnail || item.file_unique_id}/thumbnail`}
             alt={item.name}
             className="max-w-full max-h-full object-contain rounded"
             onError={(e) => {
@@ -277,6 +283,14 @@ export const FileGrid = ({
         {itemCount} {itemCount === 1 ? "item" : "items"}
       </div>
 
+      {imageViewer && (
+        <ImageViewer
+          imageUrl={imageViewer.url}
+          fileName={imageViewer.fileName}
+          onClose={() => setImageViewer(null)}
+        />
+      )}
+      
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

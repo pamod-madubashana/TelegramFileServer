@@ -131,6 +131,7 @@ async def get_all_files_route(
         for f in files_data:
             f_dict = asdict(f)
             f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
+            f_dict['file_unique_id'] = f.file_unique_id  # Include file_unique_id for streaming
             
             # Convert desktop.ini files to folder representations
             if f.file_name == "desktop.ini":
