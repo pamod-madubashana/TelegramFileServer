@@ -598,9 +598,47 @@ async def get_bots_workloads():
             "bots_available": False, 
             "workloads": {}, 
             "bots_count": 0, 
-            "active_bots": 0, 
+            "active_bots": 0,
             "error": str(e)
         }
+
+# --- Thumbnail Endpoint ---
+@app.get("/api/file/{file_id}/thumbnail")
+async def get_file_thumbnail(file_id: str, _: bool = Depends(require_auth)):
+    try:
+        bot_manager = app.state.bot_manager
+        if not bot_manager:
+            raise HTTPException(status_code=503, detail="Bot manager not available")
+
+        # Get a client to use for downloading
+        client: Client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
+        if not client:
+            raise HTTPException(status_code=500, detail="No available bot clients")
+        
+
+        photo_data = await client.download_media(file_id, in_memory=True)
+        if photo_data:
+            # Check if it's a BytesIO object
+            if hasattr(photo_data, 'getvalue'):
+                photo_bytes = photo_data.getvalue()
+                if len(photo_bytes) > 0:
+                    # Return the photo data
+                    return Response(
+                        content=photo_bytes,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"}  # Cache for 1 hour
+                    )
+            else:
+                # If it's already bytes, return directly
+                if len(photo_data) > 0:
+                    return Response(
+                        content=photo_data,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"}  # Cache for 1 hour
+                    )
+    except Exception as e:
+        logger.error(f"Error downloading file thumbnail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def _web_server(bot_manager):
     # Store the bot manager instance for use in routes
