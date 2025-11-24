@@ -16,7 +16,7 @@ interface FileGridProps {
   onPaste?: () => void;
   onDelete: (item: FileItem, index: number) => void;
   onRename: (item: FileItem, index: number) => void;
-  onMove: (item: FileItem, targetFolder: string) => void;
+  onMove: (item: FileItem, targetFolder: FileItem) => void; // This is correct now
   renamingItem: { item: FileItem; index: number } | null;
   onRenameConfirm: (newName: string) => void;
   onRenameCancel: () => void;
@@ -115,7 +115,8 @@ export const FileGrid = ({
       return;
     }
 
-    onMove(draggedItem, targetItem.name);
+    // Pass the target item (folder) to onMove instead of just the name
+    onMove(draggedItem, targetItem);
     setDraggedItem(null);
   };
 

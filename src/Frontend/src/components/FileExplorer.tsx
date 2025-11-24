@@ -42,7 +42,7 @@ export const FileExplorer = () => {
       : `/${currentPath.slice(1).join('/')}`;
 
   const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
-  const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard } = useFileOperations();
+  const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard, pasteItem } = useFileOperations();
 
   // Filter files based on current path and search query
   const getFilteredItems = (): FileItem[] => {
@@ -129,9 +129,21 @@ export const FileExplorer = () => {
     toast.success(`Cut "${item.name}"`);
   };
 
-  const handlePaste = () => {
-    // Paste functionality disabled for now - requires backend API
-    toast.info("Paste functionality coming soon");
+  const handlePaste = async () => {
+    try {
+      // Construct the target path
+      let targetPath = "/";
+      if (currentPath.length > 1) {
+        targetPath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
+      await pasteItem(targetPath);
+      toast.success("Operation completed successfully");
+      refetch(); // Refresh the file list
+    } catch (error: any) {
+      toast.error(error.message || "Failed to complete operation");
+      console.error(error);
+    }
   };
 
   const handleDelete = (item: FileItem, index: number) => {
@@ -158,9 +170,95 @@ export const FileExplorer = () => {
     setRenamingItem(null);
   };
 
-  const handleMove = (item: FileItem, targetFolder: string) => {
-    // Move functionality disabled for now - requires backend API
-    toast.info("Move functionality coming soon");
+  const handleMove = async (item: FileItem, targetFolder: FileItem) => {
+    try {
+      // The target path should be the path of the target folder + the folder name
+      // For example, if targetFolder has path "/" and name "TestFolder", 
+      // the target path for files moved into it should be "/TestFolder"
+      let targetPath = "/";
+      if (targetFolder.file_path === "/") {
+        targetPath = `/${targetFolder.name}`;
+      } else {
+        targetPath = `${targetFolder.file_path}/${targetFolder.name}`;
+      }
+      
+      // For the move operation, we need to construct the request
+      const request = {
+        file_id: item.id || "",
+        target_path: targetPath
+      };
+      
+      const response = await fetch("/api/files/move", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(request),
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to move file");
+      }
+      
+      toast.success(`Moved "${item.name}" successfully`);
+      refetch(); // Refresh the file list
+    } catch (error: any) {
+      toast.error(error.message || "Failed to move file");
+      console.error(error);
+    }
+  };
+
+  // Create a separate function for the Sidebar's onDrop
+  const handleSidebarDrop = async (item: FileItem, targetFolderName: string) => {
+    try {
+      // Map the target folder name to its path
+      let targetPath = "/";
+      switch (targetFolderName) {
+        case "Images":
+          targetPath = "/Images";
+          break;
+        case "Documents":
+          targetPath = "/Documents";
+          break;
+        case "Videos":
+          targetPath = "/Videos";
+          break;
+        case "Audio":
+          targetPath = "/Audio";
+          break;
+        case "Voice Messages":
+          targetPath = "/Voice Messages";
+          break;
+        default:
+          targetPath = "/";
+      }
+      
+      // For the move operation, we need to construct the request
+      const request = {
+        file_id: item.id || "",
+        target_path: targetPath
+      };
+      
+      const response = await fetch("/api/files/move", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(request),
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to move file");
+      }
+      
+      toast.success(`Moved "${item.name}" successfully`);
+      refetch(); // Refresh the file list
+    } catch (error: any) {
+      toast.error(error.message || "Failed to move file");
+      console.error(error);
+    }
   };
 
   const handleFilterChange = (filter: string) => {
@@ -237,7 +335,7 @@ export const FileExplorer = () => {
       <Sidebar
         currentPath={currentPath}
         onNavigate={handleFilterChange}
-        onDrop={handleMove}
+        onDrop={handleSidebarDrop}
         files={files}
         selectedFilter={selectedFilter}
       />

@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
+from bson import ObjectId  # Add this import for ObjectId
 import sys
 import io
 import tempfile
@@ -153,6 +154,56 @@ async def create_folder_route(request: CreateFolderRequest, _: bool = Depends(re
             raise HTTPException(status_code=400, detail="Folder already exists")
     except Exception as e:
         logger.error(f"Error creating folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class MoveFileRequest(BaseModel):
+    file_id: str
+    target_path: str
+
+class CopyFileRequest(BaseModel):
+    file_id: str
+    target_path: str
+
+@app.post("/api/files/move")
+async def move_file_route(request: MoveFileRequest, _: bool = Depends(require_auth)):
+    try:
+        # Get the file by ID
+        file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Update the file's path
+        r = database.Files.update_one(
+            {"_id": ObjectId(request.file_id)},
+            {"$set": {"file_path": request.target_path}}
+        )
+        return {"message": "File moved successfully"}
+    except Exception as e:
+        logger.error(f"Error moving file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/files/copy")
+async def copy_file_route(request: CopyFileRequest, _: bool = Depends(require_auth)):
+    try:
+        # Get the file by ID
+        file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Create a copy of the file with the new path
+        new_file_data = file_data.copy()
+        new_file_data["_id"] = ObjectId()  # Generate new ID
+        new_file_data["file_path"] = request.target_path
+        
+        # For copied files, we need to handle the unique ID properly
+        # For now, we'll keep the same file_unique_id since it refers to the Telegram file
+        # In a real implementation, you might want to duplicate the file in Telegram as well
+        
+        database.Files.insert_one(new_file_data)
+        
+        return {"message": "File copied successfully", "new_file_id": str(new_file_data["_id"])}
+    except Exception as e:
+        logger.error(f"Error copying file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/system/workloads")

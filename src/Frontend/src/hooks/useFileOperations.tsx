@@ -7,6 +7,11 @@ interface ClipboardItem {
   sourcePath: string;
 }
 
+interface CopyMoveRequest {
+  file_id: string;
+  target_path: string;
+}
+
 export const useFileOperations = () => {
   const [clipboard, setClipboard] = useState<ClipboardItem | null>(null);
 
@@ -24,11 +29,59 @@ export const useFileOperations = () => {
 
   const hasClipboard = () => clipboard !== null;
 
+  const pasteItem = async (targetPath: string) => {
+    if (!clipboard) return;
+
+    try {
+      const request: CopyMoveRequest = {
+        file_id: clipboard.item.id || "",
+        target_path: targetPath
+      };
+
+      if (clipboard.operation === "copy") {
+        const response = await fetch("/api/files/copy", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(request),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to copy file");
+        }
+      } else {
+        // Move operation
+        const response = await fetch("/api/files/move", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(request),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to move file");
+        }
+      }
+
+      // Clear clipboard after successful operation
+      clearClipboard();
+      return true;
+    } catch (error) {
+      console.error("Error during paste operation:", error);
+      throw error;
+    }
+  };
+
   return {
     clipboard,
     copyItem,
     cutItem,
     clearClipboard,
     hasClipboard,
+    pasteItem,
   };
 };
