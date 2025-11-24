@@ -40,29 +40,19 @@ export const Sidebar = ({ currentPath, onNavigate, onDrop, files, selectedFilter
     setDragOverFolder(null);
   };
 
-  // Count files by type
-  const fileCounts = {
-    all: files.length,
-    document: files.filter(f => f.fileType === 'document').length,
-    photo: files.filter(f => f.fileType === 'photo').length,
-    video: files.filter(f => f.fileType === 'video').length,
-    audio: files.filter(f => f.fileType === 'audio').length,
-    voice: files.filter(f => f.fileType === 'voice').length,
-  };
-
   const filters = [
-    { name: "Home", icon: FolderOpen, filter: "all", count: fileCounts.all },
-    { name: "Images", icon: Image, filter: "photo", count: fileCounts.photo },
-    { name: "Documents", icon: FileText, filter: "document", count: fileCounts.document },
-    { name: "Videos", icon: Video, filter: "video", count: fileCounts.video },
-    { name: "Audio", icon: Music, filter: "audio", count: fileCounts.audio },
-    { name: "Voice Messages", icon: Mic, filter: "voice", count: fileCounts.voice },
+    { name: "Home", icon: FolderOpen, filter: "all" },
+    { name: "Images", icon: Image, filter: "photo" },
+    { name: "Documents", icon: FileText, filter: "document" },
+    { name: "Videos", icon: Video, filter: "video" },
+    { name: "Audio", icon: Music, filter: "audio" },
+    { name: "Voice Messages", icon: Mic, filter: "voice" },
   ];
 
   return (
     <div className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col">
       <div className="p-4 border-b border-sidebar-border">
-        <div className="flex items-center gap-2 text-sidebar-primary-foreground">
+        <div className="flex items-center gap-2 text-sidebar-foreground">
           <FolderOpen className="w-5 h-5 text-primary" />
           <span className="font-semibold">File Server</span>
         </div>
@@ -90,26 +80,10 @@ export const Sidebar = ({ currentPath, onNavigate, onDrop, files, selectedFilter
                 <Icon className="w-4 h-4" />
                 <span>{filter.name}</span>
               </div>
-              <span className="text-xs text-muted-foreground">{filter.count}</span>
             </button>
           );
         })}
       </nav>
-
-      <div className="border-t border-sidebar-border p-4">
-        <div className="space-y-1 text-xs text-muted-foreground">
-          <div className="flex justify-between">
-            <span>Total Files:</span>
-            <span className="font-medium">{files.length}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Total Size:</span>
-            <span className="font-medium">
-              {formatBytes(files.reduce((sum, f) => sum + (f.size || 0), 0))}
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

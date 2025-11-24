@@ -47,7 +47,8 @@ export const FileGrid = ({
   onRenameCancel,
   currentFolder,
   onNewFolder,
-}: FileGridProps) => {
+  isLoading,
+}: FileGridProps & { isLoading?: boolean }) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedItem, setDraggedItem] = useState<FileItem | null>(null);
 
@@ -117,6 +118,17 @@ export const FileGrid = ({
         return <FileText className="w-10 h-10 text-muted-foreground" />;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col bg-background">

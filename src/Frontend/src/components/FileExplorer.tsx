@@ -210,17 +210,6 @@ export const FileExplorer = () => {
   };
 
   // Show loading state
-  if (isLoading) {
-    return (
-      <div className="flex h-screen bg-background text-foreground items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading files...</p>
-        </div>
-      </div>
-    );
-  }
-
   // Show error state
   if (isError) {
     return (
@@ -271,6 +260,7 @@ export const FileExplorer = () => {
           onRenameCancel={() => setRenamingItem(null)}
           currentFolder={currentFolder}
           onNewFolder={handleNewFolder}
+          isLoading={isLoading}
         />
       </div>
 
