@@ -8,6 +8,7 @@ REQUIREMENTS="$PROJECT_DIR/requirements.txt"
 MAIN_FILE="$PROJECT_DIR/__main__.py"
 SERVICE_NAME="telegram-file-server"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+FRONTEND_DIR="$PROJECT_DIR/src/Frontend"
 
 # Create venv if not exists
 if [ ! -d "$VENV_PATH" ]; then
@@ -25,6 +26,22 @@ if ! pip install -r "$REQUIREMENTS" > /dev/null 2>&1; then
         rm -rf /var/lib/apt/lists/*
     apt-get update && apt-get install -y gcc libffi-dev build-essential
     pip install -r "$REQUIREMENTS"
+fi
+
+# Install frontend dependencies if frontend directory exists
+if [ -d "$FRONTEND_DIR" ]; then
+    echo "Installing frontend dependencies..."
+    cd "$FRONTEND_DIR"
+    if command -v npm >/dev/null 2>&1; then
+        npm install
+        echo "Frontend dependencies installed successfully!"
+    else
+        echo "Warning: npm not found. Skipping frontend installation."
+        echo "Please install Node.js and npm to build the frontend."
+    fi
+    cd "$PROJECT_DIR"
+else
+    echo "Frontend directory not found. Skipping frontend installation."
 fi
 
 # Function to create systemd service
