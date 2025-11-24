@@ -13,7 +13,22 @@ import { RenameInput } from "./RenameInput";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 
 export const FileExplorer = () => {
-  const [currentPath, setCurrentPath] = useState<string[]>(["Home"]);
+  // Initialize currentPath from localStorage or default to ["Home"]
+  const [currentPath, setCurrentPath] = useState<string[]>(() => {
+    const savedPath = localStorage.getItem('fileExplorerPath');
+    if (savedPath) {
+      try {
+        const parsedPath = JSON.parse(savedPath);
+        if (Array.isArray(parsedPath)) {
+          return parsedPath;
+        }
+      } catch (e) {
+        console.error('Failed to parse saved path', e);
+      }
+    }
+    return ["Home"];
+  });
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
@@ -21,6 +36,11 @@ export const FileExplorer = () => {
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
   const queryClient = useQueryClient();
+
+  // Save currentPath to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('fileExplorerPath', JSON.stringify(currentPath));
+  }, [currentPath]);
 
   // Define virtual folders
   const virtualFolders: FileItem[] = [
@@ -116,11 +136,19 @@ export const FileExplorer = () => {
   const handleBack = () => {
     if (currentPath.length > 1) {
       setCurrentPath(currentPath.slice(0, -1));
+    } else {
+      // If we're already at the root, explicitly set to Home
+      setCurrentPath(["Home"]);
     }
   };
 
   const handleBreadcrumbClick = (index: number) => {
-    setCurrentPath(currentPath.slice(0, index + 1));
+    if (index === 0) {
+      // If clicking on Home, explicitly set to Home
+      setCurrentPath(["Home"]);
+    } else {
+      setCurrentPath(currentPath.slice(0, index + 1));
+    }
   };
 
   const handleCopy = (item: FileItem) => {
@@ -400,6 +428,7 @@ export const FileExplorer = () => {
     if (folderName && folderName !== "Home") {
       setCurrentPath(["Home", folderName]);
     } else {
+      // Explicitly set to Home when navigating to the root
       setCurrentPath(["Home"]);
     }
   };
