@@ -5,6 +5,7 @@ import { ContextMenu } from "./ContextMenu";
 import { RenameInput } from "./RenameInput";
 import { ImageViewer } from "./ImageViewer";
 import { MediaPlayer } from "./MediaPlayer";
+import { Thumbnail } from "./Thumbnail";
 
 interface FileGridProps {
   items: FileItem[];
@@ -121,51 +122,13 @@ export const FileGrid = ({
   };
 
   const getFileIcon = (item: FileItem) => {
+    // For folders, use the Folder icon directly
     if (item.type === "folder") {
       return <Folder className="w-20 h-20 text-primary" />;
     }
-
-    // If item has a thumbnail, try to show it
-    if (item.thumbnail) {
-      return (
-        <div className="relative w-30 h-20 flex items-center justify-center">
-          <img
-            src={`/api/file/${item.thumbnail}/thumbnail`}
-            alt={item.name}
-            className="max-w-full max-h-full object-contain rounded"
-            onError={(e) => {
-              // Fallback to icon on error
-              e.currentTarget.style.display = 'none';
-              e.currentTarget.parentElement?.classList.remove('w-12', 'h-12'); // Remove fixed size container
-              // We can't easily replace the DOM element here with a React component, 
-              // so we hide the image. The parent container will be empty.
-              // A better approach is to use a state for error, but for simplicity in this map loop:
-              // We'll just let it hide.
-              // Ideally we would want to show the icon below.
-              // Let's try a different approach:
-            }}
-          />
-          {/* Fallback icon (hidden by default, shown if img fails? No, CSS can't do that easily without state) */}
-          {/* Since we are in a map, using state for each item is expensive. */}
-          {/* Let's use a simple approach: If thumbnail exists, we assume it works. If it fails, we show broken image or nothing. */}
-          {/* Better: Use a custom component for FileIcon that handles loading state */}
-        </div>
-      );
-    }
-
-    switch (item.extension) {
-      case "jpg":
-      case "png":
-      case "gif":
-        return <ImageIcon className="w-10 h-10 text-blue-500" />;
-      case "pdf":
-      case "docx":
-        return <FileText className="w-10 h-10 text-red-500" />;
-      case "zip":
-        return <FileArchive className="w-10 h-10 text-yellow-500" />;
-      default:
-        return <FileText className="w-10 h-10 text-muted-foreground" />;
-    }
+    
+    // Use the new Thumbnail component for better error handling
+    return <Thumbnail item={item} />;
   };
 
   if (isLoading) {
