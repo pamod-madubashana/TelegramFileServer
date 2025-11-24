@@ -68,7 +68,36 @@ class IndexMessages:
                 file_name = getattr(media, 'file_name', "N/A")
                 thumbnail = media.thumbs[0].file_id if media.thumbs else None
             
-            logger.info(f"Processing file message {message.caption or file_name}")
+            # Determine file path based on media type and extension
+            file_path = "/Documents" # Default path
+            
+            if file_type == "photo":
+                file_path = "/Images"
+            elif file_type == "video":
+                file_path = "/Videos"
+            elif file_type == "voice":
+                file_path = "/Voice Messages"
+            elif file_type == "audio":
+                file_path = "/Audio"
+            elif file_type == "document":
+                # Check extension for documents
+                ext = file_name.split('.')[-1].lower() if '.' in file_name else ""
+                
+                video_exts = ['mp4', 'mkv', 'avi', 'mov', 'webm']
+                image_exts = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+                audio_exts = ['mp3', 'wav', 'ogg', 'flac', 'm4a']
+                
+                if ext in video_exts:
+                    file_path = "/Videos"
+                    file_type = "video" # Update type as well
+                elif ext in image_exts:
+                    file_path = "/Images"
+                    file_type = "photo" # Update type as well
+                elif ext in audio_exts:
+                    file_path = "/Audio"
+                    file_type = "audio" # Update type as well
+            
+            logger.info(f"Processing file message {message.caption or file_name} -> {file_path}")
             file_unique_id = media.file_unique_id
             file_size = media.file_size
             file_size = int(media.file_size/1024/1024)
@@ -81,7 +110,8 @@ class IndexMessages:
                 file_unique_id=file_unique_id,
                 file_size=file_size,
                 file_name=file_name,
-                file_caption=file_caption
+                file_caption=file_caption,
+                file_path=file_path
             )
         except Exception as e:
             logger.error(f"Error in save_file: {e}")

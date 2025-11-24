@@ -31,9 +31,9 @@ export const FileExplorer = () => {
   const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
 
   // Convert currentPath to API path format
-  // For virtual folders, use "all" to fetch all files, otherwise use the actual path
+  // For virtual folders, use the folder name as path (e.g., /Images, /Documents)
   const currentApiPath = isVirtualFolder
-    ? "all"  // Special value to fetch all files for virtual folders
+    ? `/${currentFolder}`
     : currentPath.length === 1 && currentPath[0] === "Home"
       ? "/"
       : `/${currentPath.slice(1).join('/')}`;
