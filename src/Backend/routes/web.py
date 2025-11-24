@@ -133,19 +133,6 @@ async def get_all_files_route(
             f_dict['id'] = str(f_dict['id']) # Convert ObjectId to string
             f_dict['file_unique_id'] = f.file_unique_id  # Include file_unique_id for streaming
             
-            # Convert desktop.ini files to folder representations
-            if f.file_name == "desktop.ini":
-                # Extract folder name from path (e.g., "/FolderName/desktop.ini" -> "FolderName")
-                path_parts = f.file_path.strip('/').split('/')
-                if len(path_parts) >= 2:
-                    folder_name = path_parts[-2]  # Get the folder name before desktop.ini
-                else:
-                    folder_name = "New Folder"
-                
-                # Transform to folder object
-                f_dict['file_name'] = folder_name
-                f_dict['file_type'] = 'folder'
-            
             files_list.append(f_dict)
         return {"files": files_list}
     except Exception as e:

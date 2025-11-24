@@ -2,7 +2,6 @@
 
 from typing import Any, Literal
 from dataclasses import dataclass
-import re
 from d4rk.Logs import setup_logger
 
 from pymongo.collection import Collection
@@ -17,7 +16,7 @@ class FileData:
     chat_id: int
     message_id: int
     thumbnail: str = None
-    file_type: Literal["document","video","photo","voice","audio"] = None
+    file_type: Literal["document","video","photo","voice","audio","folder"] = None
     file_unique_id: str = None
     file_size: int = None
     file_name: str|None = None
@@ -57,6 +56,31 @@ class Files(Collection):
             return True
         return None
 
+    def add_folder(self, folder_name: str, folder_path: str = "/"):
+        """Add a folder entry to the database"""
+        # Check if folder already exists
+        existing = self.find_one({"file_name": folder_name, "file_path": folder_path, "file_type": "folder"})
+        if existing:
+            return False
+            
+        # Generate a unique ID for the folder
+        import hashlib
+        folder_unique_id = f"folder_{hashlib.md5(f'{folder_path}/{folder_name}'.encode()).hexdigest()}"
+            
+        # Insert folder entry
+        self.insert_one({
+            "chat_id": 0,  # System-created folder
+            "message_id": 0,  # System-created folder
+            "thumbnail": None,
+            "file_type": "folder",
+            "file_unique_id": folder_unique_id,
+            "file_size": 0,
+            "file_name": folder_name,
+            "file_caption": folder_name,
+            "file_path": folder_path
+        })
+        return True
+
     def get_all_files(self):
         files = self.find()
         return [FileData(
@@ -73,31 +97,22 @@ class Files(Collection):
             ) for file in files]
     
     def get_files_by_path(self, path: str = "/"):
-        """Get files for a specific path/folder"""
+        """Get files and folders for a specific path"""
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
         if path == "all":
-            # Get all files except desktop.ini
-            files_query = {"file_name": {"$ne": "desktop.ini"}}
+            # Get all files except folders
+            files_query = {"file_type": {"$ne": "folder"}}
             all_items = list(self.find(files_query))
-        # For root path, get files with path="/" and folders (desktop.ini files)
+        # For root path, get files with path="/" and folders with path="/"
         elif path == "/" or path == "Home":
-            # Get root-level files (not desktop.ini)
-            files_query = {"file_path": "/", "file_name": {"$ne": "desktop.ini"}}
-            # Get folders (desktop.ini files at first level: /FolderName/desktop.ini)
-            folders_query = {"file_name": "desktop.ini", "file_path": {"$regex": "^/[^/]+/desktop\\.ini$"}}
-            
-            files = list(self.find(files_query))
-            folders = list(self.find(folders_query))
-            all_items = files + folders
+            # Get root-level files and folders
+            files_query = {"file_path": "/", "$or": [{"file_type": {"$ne": "folder"}}, {"file_type": "folder"}]}
+            all_items = list(self.find(files_query))
         else:
-            # Get files in the specified folder
-            files_query = {"file_path": path, "file_name": {"$ne": "desktop.ini"}}
-            # Get subfolders (desktop.ini files one level deeper)
-            folders_query = {"file_name": "desktop.ini", "file_path": {"$regex": f"^{re.escape(path)}/[^/]+/desktop\\.ini$"}}
-            
-            files = list(self.find(files_query))
-            folders = list(self.find(folders_query))
-            all_items = files + folders
+            # Get files and folders in the specified folder
+            # For a path like "/TestFolder", we want files where file_path = "/TestFolder"
+            query = {"file_path": path}
+            all_items = list(self.find(query))
         
         return [FileData(
             id=file.get("_id"), 
@@ -113,34 +128,13 @@ class Files(Collection):
         ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/"):
-        """Create a folder by creating a desktop.ini file at the specified path"""
-        # Construct the folder path
-        if current_path == "/" or current_path == "Home":
-            folder_path = f"/{folder_name}"
-        else:
-            folder_path = f"{current_path}/{folder_name}"
+        """Create a folder entry in the database"""
+        # The folder's path is where it's located, which is the current_path
+        # e.g., if we're in "/" and create "TestFolder", the folder's path is "/"
+        # if we're in "/TestFolder" and create "SubFolder", the folder's path is "/TestFolder"
+        folder_path = current_path
         
-        # Create desktop.ini file entry
-        desktop_ini_path = f"{folder_path}/desktop.ini"
-        
-        # Check if folder already exists
-        existing = self.find_one({"file_name": "desktop.ini", "file_path": desktop_ini_path})
-        if existing:
-            return False
-        
-        # Insert desktop.ini file to represent the folder
-        self.insert_one({
-            "chat_id": 0,  # System-created folder
-            "message_id": 0,  # System-created folder
-            "thumbnail": None,
-            "file_type": "document",
-            "file_unique_id": f"folder_{folder_name}_{hash(desktop_ini_path)}",
-            "file_size": 0,
-            "file_name": "desktop.ini",
-            "file_caption": f"Folder: {folder_name}",
-            "file_path": desktop_ini_path
-        })
-        return True
+        return self.add_folder(folder_name, folder_path)
 
     def get_file_by_unique_id(self, file_unique_id: str):
         """Get a file by its unique ID"""

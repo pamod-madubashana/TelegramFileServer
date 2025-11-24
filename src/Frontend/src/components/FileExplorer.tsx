@@ -18,8 +18,6 @@ export const FileExplorer = () => {
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
 
-  const currentFolder = currentPath[currentPath.length - 1];
-
   // Define virtual folders
   const virtualFolders: FileItem[] = [
     { name: "Images", type: "folder", icon: "📁", fileType: "photo" },
@@ -28,6 +26,9 @@ export const FileExplorer = () => {
     { name: "Audio", type: "folder", icon: "📁", fileType: "audio" },
     { name: "Voice Messages", type: "folder", icon: "📁", fileType: "voice" },
   ];
+
+  // Current folder name (last part of currentPath)
+  const currentFolder = currentPath[currentPath.length - 1] || "Home";
 
   // Check if current folder is a virtual folder
   const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
@@ -52,7 +53,7 @@ export const FileExplorer = () => {
       );
 
       // Add user-created folders (those with type 'folder')
-      const userFolders = files.filter((f) => f.type === "folder" || f.fileType === "folder");
+      const userFolders = files.filter((f) => f.type === "folder");
       const filteredUserFolders = userFolders.filter((folder) =>
         folder.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
@@ -65,23 +66,24 @@ export const FileExplorer = () => {
 
     // Filter by folder/type
     if (currentFolder === "Images" || selectedFilter === "photo") {
-      filteredFiles = files.filter((f) => f.fileType === "photo");
+      // Show photos AND folders in the Images path
+      filteredFiles = files.filter((f) => f.fileType === "photo" || f.type === "folder");
     } else if (currentFolder === "Documents" || selectedFilter === "document") {
-      filteredFiles = files.filter((f) => f.fileType === "document");
+      // Show documents AND folders in the Documents path
+      filteredFiles = files.filter((f) => f.fileType === "document" || f.type === "folder");
     } else if (currentFolder === "Videos" || selectedFilter === "video") {
-      filteredFiles = files.filter((f) => f.fileType === "video");
+      // Show videos AND folders in the Videos path
+      filteredFiles = files.filter((f) => f.fileType === "video" || f.type === "folder");
     } else if (currentFolder === "Audio" || selectedFilter === "audio") {
-      filteredFiles = files.filter((f) => f.fileType === "audio");
+      // Show audio AND folders in the Audio path
+      filteredFiles = files.filter((f) => f.fileType === "audio" || f.type === "folder");
     } else if (currentFolder === "Voice Messages" || selectedFilter === "voice") {
-      filteredFiles = files.filter((f) => f.fileType === "voice");
+      // Show voice messages AND folders in the Voice Messages path
+      filteredFiles = files.filter((f) => f.fileType === "voice" || f.type === "folder");
     } else if (currentFolder !== "Home") {
       // For user-created folders, we just show the files returned by the API
       // The API already filters by path, so we don't need to filter here
-      // We only need to check if it's NOT a virtual folder
-      const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
-      if (!isVirtualFolder) {
-        filteredFiles = files;
-      }
+      filteredFiles = files;
     }
 
     // Apply search filter
@@ -99,7 +101,7 @@ export const FileExplorer = () => {
   const handleNavigate = (folderName: string) => {
     // Navigate into virtual folders OR user-created folders
     const isVirtualFolder = virtualFolders.some(f => f.name === folderName);
-    const isUserFolder = files.some(f => (f.type === "folder" || f.fileType === "folder") && f.name === folderName);
+    const isUserFolder = files.some(f => f.type === "folder" && f.name === folderName);
 
     if (isVirtualFolder || isUserFolder) {
       setCurrentPath([...currentPath, folderName]);
@@ -184,6 +186,13 @@ export const FileExplorer = () => {
 
   const handleNewFolder = async (folderName: string) => {
     try {
+      // Construct the correct path for the backend
+      let backendPath = "/";
+      if (currentPath.length > 1) {
+        // If we're in a nested folder, construct the full path
+        backendPath = `/${currentPath.slice(1).join('/')}`;
+      }
+      
       const response = await fetch("/api/folders/create", {
         method: "POST",
         headers: {
@@ -191,7 +200,7 @@ export const FileExplorer = () => {
         },
         body: JSON.stringify({
           folderName,
-          currentPath: currentFolder === "Home" ? "/" : currentFolder,
+          currentPath: backendPath,
         }),
       });
 
@@ -275,7 +284,7 @@ export const FileExplorer = () => {
       
       <NewFolderDialog
         open={newFolderDialogOpen}
-        currentPath={currentFolder}
+        currentPath={currentApiPath}  // Pass the full path, not just the folder name
         onClose={() => setNewFolderDialogOpen(false)}
         onConfirm={handleNewFolder}
       />

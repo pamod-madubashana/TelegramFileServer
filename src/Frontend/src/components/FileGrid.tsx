@@ -121,7 +121,7 @@ export const FileGrid = ({
 
   const getFileIcon = (item: FileItem) => {
     if (item.type === "folder") {
-      return <Folder className="w-12 h-12 text-primary" />;
+      return <Folder className="w-20 h-20 text-primary" />;
     }
 
     // If item has a thumbnail, try to show it

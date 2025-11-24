@@ -29,6 +29,8 @@ export const getFileIcon = (fileType: string, fileName?: string): string => {
   const extension = fileName?.split('.').pop()?.toLowerCase();
 
   switch (fileType) {
+    case 'folder':
+      return '📁';
     case 'photo':
       return '🖼️';
     case 'video':
@@ -52,23 +54,11 @@ export const apiFileToFileItem = (apiFile: ApiFile): FileItem => {
   const fileName = apiFile.file_name || `${apiFile.file_type}_${apiFile.message_id}`;
   const extension = fileName.split('.').pop();
 
-  // Handle folder type
-  if (apiFile.file_type === 'folder') {
-    return {
-      id: apiFile.id,
-      name: fileName,
-      type: 'folder',
-      icon: '📁',
-      fileType: 'folder',
-      file_path: apiFile.file_path,
-    };
-  }
-
   return {
     id: apiFile.id,
     file_unique_id: apiFile.file_unique_id,
     name: fileName,
-    type: 'file',
+    type: apiFile.file_type === 'folder' ? 'folder' : 'file',
     icon: getFileIcon(apiFile.file_type, fileName),
     extension: extension !== fileName ? extension : undefined,
     size: apiFile.file_size,
