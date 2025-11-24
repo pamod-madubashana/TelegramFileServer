@@ -16,10 +16,6 @@ export const FileExplorer = () => {
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
 
-  const { files, isLoading, isError, error } = useFiles();
-  const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard } = useFileOperations();
-
-
   const currentFolder = currentPath[currentPath.length - 1];
 
   // Define virtual folders
@@ -30,6 +26,20 @@ export const FileExplorer = () => {
     { name: "Audio", type: "folder", icon: "📁", fileType: "audio" },
     { name: "Voice Messages", type: "folder", icon: "📁", fileType: "voice" },
   ];
+
+  // Check if current folder is a virtual folder
+  const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
+
+  // Convert currentPath to API path format
+  // For virtual folders, use "all" to fetch all files, otherwise use the actual path
+  const currentApiPath = isVirtualFolder
+    ? "all"  // Special value to fetch all files for virtual folders
+    : currentPath.length === 1 && currentPath[0] === "Home"
+      ? "/"
+      : `/${currentPath.slice(1).join('/')}`;
+
+  const { files, isLoading, isError, error, refetch } = useFiles(currentApiPath);
+  const { clipboard, copyItem, cutItem, clearClipboard, hasClipboard } = useFileOperations();
 
   // Filter files based on current path and search query
   const getFilteredItems = (): FileItem[] => {
@@ -62,6 +72,15 @@ export const FileExplorer = () => {
       filteredFiles = files.filter((f) => f.fileType === "audio");
     } else if (currentFolder === "Voice Messages" || selectedFilter === "voice") {
       filteredFiles = files.filter((f) => f.fileType === "voice");
+    } else if (currentFolder !== "Home") {
+      // Check if we're in a user-created folder
+      const isUserFolder = files.some(f => (f.type === "folder" || f.fileType === "folder") && f.name === currentFolder);
+      if (isUserFolder) {
+        // Filter files that belong to this folder (by file_path or folder association)
+        // For now, show empty array since files don't have file_path set yet
+        // TODO: When files are moved to folders, filter by file_path === currentFolder
+        filteredFiles = files.filter((f) => f.file_path === currentFolder);
+      }
     }
 
     // Apply search filter
@@ -77,8 +96,11 @@ export const FileExplorer = () => {
   const filteredItems = getFilteredItems();
 
   const handleNavigate = (folderName: string) => {
-    // Navigate into virtual folders
-    if (virtualFolders.some(f => f.name === folderName)) {
+    // Navigate into virtual folders OR user-created folders
+    const isVirtualFolder = virtualFolders.some(f => f.name === folderName);
+    const isUserFolder = files.some(f => (f.type === "folder" || f.fileType === "folder") && f.name === folderName);
+
+    if (isVirtualFolder || isUserFolder) {
       setCurrentPath([...currentPath, folderName]);
       setSelectedFilter("all"); // Reset filter when navigating
     }
@@ -164,8 +186,8 @@ export const FileExplorer = () => {
       }
 
       toast.success(`Folder "${folderName}" created successfully`);
-      // Refresh the file list
-      window.location.reload();
+      // Refresh the file list for current path
+      refetch();
     } catch (error) {
       toast.error("Failed to create folder");
       console.error(error);

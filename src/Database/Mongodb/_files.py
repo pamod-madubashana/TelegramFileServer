@@ -2,6 +2,7 @@
 
 from typing import Any, Literal
 from dataclasses import dataclass
+import re
 from d4rk.Logs import setup_logger
 
 from pymongo.collection import Collection
@@ -70,6 +71,46 @@ class Files(Collection):
             file_caption=file.get("file_caption"),
             file_path=file.get("file_path", "/")  # Default to root if not set
             ) for file in files]
+    
+    def get_files_by_path(self, path: str = "/"):
+        """Get files for a specific path/folder"""
+        # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
+        if path == "all":
+            # Get all files except desktop.ini
+            files_query = {"file_name": {"$ne": "desktop.ini"}}
+            all_items = list(self.find(files_query))
+        # For root path, get files with path="/" and folders (desktop.ini files)
+        elif path == "/" or path == "Home":
+            # Get root-level files (not desktop.ini)
+            files_query = {"file_path": "/", "file_name": {"$ne": "desktop.ini"}}
+            # Get folders (desktop.ini files at first level: /FolderName/desktop.ini)
+            folders_query = {"file_name": "desktop.ini", "file_path": {"$regex": "^/[^/]+/desktop\\.ini$"}}
+            
+            files = list(self.find(files_query))
+            folders = list(self.find(folders_query))
+            all_items = files + folders
+        else:
+            # Get files in the specified folder
+            files_query = {"file_path": path, "file_name": {"$ne": "desktop.ini"}}
+            # Get subfolders (desktop.ini files one level deeper)
+            folders_query = {"file_name": "desktop.ini", "file_path": {"$regex": f"^{re.escape(path)}/[^/]+/desktop\\.ini$"}}
+            
+            files = list(self.find(files_query))
+            folders = list(self.find(folders_query))
+            all_items = files + folders
+        
+        return [FileData(
+            id=file.get("_id"), 
+            chat_id=file.get("chat_id"), 
+            message_id=file.get("message_id"), 
+            file_type=file.get("file_type"),
+            thumbnail=file.get("thumbnail"), 
+            file_unique_id=file.get("file_unique_id"), 
+            file_size=file.get("file_size"), 
+            file_name=file.get("file_name"), 
+            file_caption=file.get("file_caption"),
+            file_path=file.get("file_path", "/")
+        ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/"):
         """Create a folder by creating a desktop.ini file at the specified path"""

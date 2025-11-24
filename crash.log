@@ -2,7 +2,10 @@ Traceback (most recent call last):
   File "d:\User\Documents\Repositories\Telegram\fileServer\__main__.py", line 68, in main
     start_bot()
     ~~~~~~~~~^^
-  File "d:\User\Documents\Repositories\Telegram\fileServer\src\Telegram\bot.py", line 45, in start_bot
-    web_server=WebServerManager,
-               ^^^^^^^^^^^^^^^^
-NameError: name 'WebServerManager' is not defined
+  File "d:\User\Documents\Repositories\Telegram\fileServer\src\Telegram\bot.py", line 32, in start_bot
+    _bot_manager = D4RK_BotManager(
+        app_name=APP_NAME,
+    ...<13 lines>...
+        # call_back=start_auto_update_service
+    )
+TypeError: D4RK_BotManager.__init__() got an unexpected keyword argument 'web_port'

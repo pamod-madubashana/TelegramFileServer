@@ -120,9 +120,13 @@ async def root():
 
 # --- API Routes ---
 @app.get("/api/files")
-async def get_all_files_route(_: bool = Depends(require_auth)):
+async def get_all_files_route(
+    path: str = Query(default="/", description="Folder path to fetch files from"),
+    _: bool = Depends(require_auth)
+):
     try:
-        files_data = database.Files.get_all_files()
+        # Fetch files for the specified path
+        files_data = database.Files.get_files_by_path(path)
         files_list = []
         for f in files_data:
             f_dict = asdict(f)
@@ -144,7 +148,7 @@ async def get_all_files_route(_: bool = Depends(require_auth)):
             files_list.append(f_dict)
         return {"files": files_list}
     except Exception as e:
-        logger.error(f"Error fetching files: {e}")
+        logger.error(f"Error fetching files for path {path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class CreateFolderRequest(BaseModel):

@@ -7,6 +7,7 @@ export interface FileItem {
   size?: number;
   fileType?: 'document' | 'video' | 'photo' | 'voice' | 'audio' | 'folder';
   thumbnail?: string | null;
+  file_path?: string;  // Path where file is located (folder name)
 }
 
 export interface ApiFile {
@@ -58,6 +59,7 @@ export const apiFileToFileItem = (apiFile: ApiFile): FileItem => {
       type: 'folder',
       icon: '📁',
       fileType: 'folder',
+      file_path: apiFile.file_path,
     };
   }
 
@@ -70,5 +72,6 @@ export const apiFileToFileItem = (apiFile: ApiFile): FileItem => {
     size: apiFile.file_size,
     fileType: apiFile.file_type,
     thumbnail: apiFile.thumbnail,
+    file_path: apiFile.file_path,
   };
 };

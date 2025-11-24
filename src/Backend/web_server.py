@@ -17,7 +17,7 @@ try:
 except ImportError:
     D4RK_BotManager = None
     
-from src.Config import WEB_APP, GOOGLE_CLIENT_ID
+from src.Config import WEB_APP, GOOGLE_CLIENT_ID, PORT
 
 # Log the Google Client ID for debugging (remove this in production)
 logger = setup_logger(__name__)
@@ -67,14 +67,15 @@ class WebServerManager:
         except Exception as e:
             logger.error(f"Failed to start frontend: {e}")
 
-    async def setup_web_server(self, preferred_port=8000) -> Literal[True] | Literal[False]:
+    async def setup_web_server(self, preferred_port=None) -> Literal[True] | Literal[False]:
         try:
-            self._web_port = preferred_port
+            # Use PORT from config if preferred_port is not provided
+            self._web_port = preferred_port if preferred_port is not None else PORT
             
             # Start frontend
             self.start_frontend()
             
-            logger.info(f"Starting FastAPI server on port {preferred_port}...")
+            logger.info(f"Starting FastAPI server on port {self._web_port}...")
 
             # Initialize FastAPI app
             self._web_app = await _web_server(self._bot_manager)
@@ -83,7 +84,7 @@ class WebServerManager:
             config = uvicorn.Config(
                 self._web_app,
                 host="0.0.0.0",
-                port=preferred_port,
+                port=self._web_port,
                 log_level="info",
                 log_config=None  # This tells Uvicorn to use the existing Python logging configuration
             )
@@ -97,15 +98,15 @@ class WebServerManager:
             # Info output
             if WEB_APP:
                 if "localhost" in WEB_APP:
-                    logger.info(f"Web app is running on http://localhost:{preferred_port}")
+                    logger.info(f"Web app is running on http://localhost:{self._web_port}")
                 else:
                     logger.info(f"Web app is running on {WEB_APP}")
             else:
                 my_ip = get_public_ip()
                 if my_ip and await check_public_ip_reachable(my_ip):
-                    logger.info(f"Web app running on http://{my_ip}:{preferred_port}")
+                    logger.info(f"Web app running on http://{my_ip}:{self._web_port}")
                 else:
-                    logger.info(f"Web app running on http://localhost:{preferred_port}")
+                    logger.info(f"Web app running on http://localhost:{self._web_port}")
 
             return True
 
