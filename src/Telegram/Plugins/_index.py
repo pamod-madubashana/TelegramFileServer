@@ -72,16 +72,16 @@ class IndexMessages:
                 thumbnail = media.thumbs[0].file_id if media.thumbs else None
             
             # Determine file path based on media type and extension
-            file_path = "/Documents" # Default path
+            file_path = "/Home/Documents" # Default path
             
             if file_type == "photo":
-                file_path = "/Images"
+                file_path = "/Home/Images"
             elif file_type == "video":
-                file_path = "/Videos"
+                file_path = "/Home/Videos"
             elif file_type == "voice":
-                file_path = "/Voice Messages"
+                file_path = "/Home/Voice Messages"
             elif file_type == "audio":
-                file_path = "/Audio"
+                file_path = "/Home/Audio"
             elif file_type == "document":
                 # Check extension for documents
                 ext = file_name.split('.')[-1].lower() if '.' in file_name else ""
@@ -91,13 +91,13 @@ class IndexMessages:
                 audio_exts = ['mp3', 'wav', 'ogg', 'flac', 'm4a']
                 
                 if ext in video_exts:
-                    file_path = "/Videos"
+                    file_path = "/Home/Videos"
                     file_type = "video" # Update type as well
                 elif ext in image_exts:
-                    file_path = "/Images"
+                    file_path = "/Home/Images"
                     file_type = "photo" # Update type as well
                 elif ext in audio_exts:
-                    file_path = "/Audio"
+                    file_path = "/Home/Audio"
                     file_type = "audio" # Update type as well
             
             logger.info(f"Processing file message {message.caption or file_name} -> {file_path}")

@@ -25,11 +25,21 @@ export default defineConfig(({ mode }) => ({
         secure: false,
       },
     },
+    // Add history API fallback for client-side routing
+    middlewareMode: false,
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  // Add build configuration for proper static file serving
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+      },
     },
   },
 }));

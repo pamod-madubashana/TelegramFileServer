@@ -38,13 +38,15 @@ export const useFileOperations = () => {
 
     try {
       const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
       const request: CopyMoveRequest = {
         file_id: clipboard.item.id || "",
         target_path: targetPath
       };
 
       if (clipboard.operation === "copy") {
-        const response = await fetchWithTimeout(`${baseUrl}/files/copy`, {
+        const response = await fetchWithTimeout(`${apiUrl}/files/copy`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -61,7 +63,7 @@ export const useFileOperations = () => {
         queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
       } else {
         // Move operation
-        const response = await fetchWithTimeout(`${baseUrl}/files/move`, {
+        const response = await fetchWithTimeout(`${apiUrl}/files/move`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

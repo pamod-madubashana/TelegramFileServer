@@ -306,6 +306,14 @@ async def stream_handler(request: Request, file_name: str):
             # Try with leading slash
             file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/"})
         
+        # If still not found, try to extract the file name from a path
+        if not file_data:
+            # Handle paths like /Home/Images/filename.jpg by extracting just the filename
+            import os
+            extracted_filename = os.path.basename(decoded_file_name)
+            if extracted_filename != decoded_file_name:
+                file_data = database.Files.find_one({"file_name": extracted_filename})
+        
         if not file_data:
             print(f"File not found in database for name: {decoded_file_name}")
             raise HTTPException(status_code=404, detail="File not found")

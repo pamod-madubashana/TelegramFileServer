@@ -108,6 +108,29 @@ class Files(Collection):
             # Get root-level files and folders
             files_query = {"file_path": "/", "$or": [{"file_type": {"$ne": "folder"}}, {"file_type": "folder"}]}
             all_items = list(self.find(files_query))
+        # Handle virtual folders with proper paths like /Home/Images
+        elif path.startswith("/Home/"):
+            # Extract the file type from the path
+            folder_name = path[6:]  # Remove "/Home/" prefix
+            
+            # Map folder names to file types
+            folder_to_type = {
+                "Images": "photo",
+                "Documents": "document",
+                "Videos": "video",
+                "Audio": "audio",
+                "Voice Messages": "voice"
+            }
+            
+            # Get files of the appropriate type
+            file_type = folder_to_type.get(folder_name)
+            if file_type:
+                files_query = {"file_type": file_type}
+                all_items = list(self.find(files_query))
+            else:
+                # If it's not a recognized virtual folder, treat as regular folder
+                files_query = {"file_path": path}
+                all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder
             # For a path like "/TestFolder", we want files where file_path = "/TestFolder"

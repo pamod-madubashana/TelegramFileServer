@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocation, useParams } from "react-router-dom";
 import { FileItem } from "@/components/types";
 import { useFiles } from "@/hooks/useFiles";
 import { useFileOperations } from "@/hooks/useFileOperations";
@@ -18,8 +19,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export const FileExplorer = () => {
-  // Initialize currentPath from localStorage or default to ["Home"]
+  const location = useLocation();
+  const { path } = useParams();
+
+  // Initialize currentPath from URL or localStorage or default to ["Home"]
   const [currentPath, setCurrentPath] = useState<string[]>(() => {
+    // First check if we have a path in the URL
+    if (path) {
+      // Split the path and filter out empty segments
+      const pathSegments = path.split('/').filter(segment => segment.length > 0);
+      if (pathSegments.length > 0) {
+        return ["Home", ...pathSegments];
+      }
+    }
+    
+    // Fallback to localStorage or default
     const savedPath = localStorage.getItem('fileExplorerPath');
     if (savedPath) {
       try {
@@ -55,7 +69,7 @@ export const FileExplorer = () => {
     // Update the browser history with the new path
     const pathString = currentPath.length === 1 && currentPath[0] === "Home" 
       ? "/" 
-      : "/" + currentPath.join('/');
+      : "/" + currentPath.slice(1).join('/');
     
     // Use replaceState for the initial load to avoid creating extra history entries
     if (window.history.state === null) {
@@ -101,9 +115,10 @@ export const FileExplorer = () => {
   const isVirtualFolder = virtualFolders.some(f => f.name === currentFolder);
 
   // Convert currentPath to API path format
-  // For virtual folders, use the folder name as path (e.g., /Images, /Documents)
+  // For virtual folders, we need to construct the proper path like /Home/Images
+  // But for the actual API calls, we need to construct the proper path
   const currentApiPath = isVirtualFolder
-    ? `/${currentFolder}`
+    ? `/${currentPath.join('/')}`  // This will create paths like /Home/Images
     : currentPath.length === 1 && currentPath[0] === "Home"
       ? "/"
       : `/${currentPath.slice(1).join('/')}`;
@@ -189,7 +204,12 @@ export const FileExplorer = () => {
     // Construct the source path correctly
     let sourcePath = "/";
     if (currentPath.length > 1) {
-      sourcePath = `/${currentPath.slice(1).join('/')}`;
+      // For virtual folders, we need to construct the path differently
+      if (isVirtualFolder) {
+        sourcePath = `/${currentPath.join('/')}`;
+      } else {
+        sourcePath = `/${currentPath.slice(1).join('/')}`;
+      }
     }
     copyItem(item, sourcePath);
     toast.success(`Copied "${item.name}"`);
@@ -199,7 +219,12 @@ export const FileExplorer = () => {
     // Construct the source path correctly
     let sourcePath = "/";
     if (currentPath.length > 1) {
-      sourcePath = `/${currentPath.slice(1).join('/')}`;
+      // For virtual folders, we need to construct the path differently
+      if (isVirtualFolder) {
+        sourcePath = `/${currentPath.join('/')}`;
+      } else {
+        sourcePath = `/${currentPath.slice(1).join('/')}`;
+      }
     }
     cutItem(item, sourcePath);
     toast.success(`Cut "${item.name}"`);
@@ -210,7 +235,12 @@ export const FileExplorer = () => {
       // Construct the target path
       let targetPath = "/";
       if (currentPath.length > 1) {
-        targetPath = `/${currentPath.slice(1).join('/')}`;
+        // For virtual folders, we need to construct the path differently
+        if (isVirtualFolder) {
+          targetPath = `/${currentPath.join('/')}`;
+        } else {
+          targetPath = `/${currentPath.slice(1).join('/')}`;
+        }
       }
       
       console.log("DEBUG: Pasting to", { targetPath });
@@ -245,7 +275,12 @@ export const FileExplorer = () => {
       // Construct the source path correctly
       let sourcePath = "/";
       if (currentPath.length > 1) {
-        sourcePath = `/${currentPath.slice(1).join('/')}`;
+        // For virtual folders, we need to construct the path differently
+        if (isVirtualFolder) {
+          sourcePath = `/${currentPath.join('/')}`;
+        } else {
+          sourcePath = `/${currentPath.slice(1).join('/')}`;
+        }
       }
       
       // Construct the target path
@@ -253,11 +288,11 @@ export const FileExplorer = () => {
       if (targetFolderName !== "Home") {
         // Map virtual folder names to their API paths
         const virtualFolderMap: Record<string, string> = {
-          "Images": "/Images",
-          "Documents": "/Documents",
-          "Videos": "/Videos",
-          "Audio": "/Audio",
-          "Voice Messages": "/Voice Messages"
+          "Images": "/Home/Images",
+          "Documents": "/Home/Documents",
+          "Videos": "/Home/Videos",
+          "Audio": "/Home/Audio",
+          "Voice Messages": "/Home/Voice Messages"
         };
         
         targetPath = virtualFolderMap[targetFolderName] || `/${targetFolderName}`;
@@ -274,9 +309,10 @@ export const FileExplorer = () => {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include", // Add this to include cookies for authentication
         body: JSON.stringify({
-          file_path: item.file_path,
-          destination_path: targetPath,
+          file_id: item.id,  // Use file_id instead of file_path
+          target_path: targetPath,
         }),
       }, 3000); // 3 second timeout
 
@@ -298,8 +334,12 @@ export const FileExplorer = () => {
       // Construct the correct path for the backend
       let backendPath = "/";
       if (currentPath.length > 1) {
-        // If we're in a nested folder, construct the full path
-        backendPath = `/${currentPath.slice(1).join('/')}`;
+        // For virtual folders, we need to construct the path differently
+        if (isVirtualFolder) {
+          backendPath = `/${currentPath.join('/')}`;
+        } else {
+          backendPath = `/${currentPath.slice(1).join('/')}`;
+        }
       }
       
       const baseUrl = getApiBaseUrl();
@@ -311,6 +351,7 @@ export const FileExplorer = () => {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include", // Add this to include cookies for authentication
         body: JSON.stringify({
           folderName,
           currentPath: backendPath,
@@ -331,28 +372,6 @@ export const FileExplorer = () => {
       console.error(error);
     }
   };
-
-  // Determine the selected filter based on the current path
-  useEffect(() => {
-    // Map folder name to filter
-    const folderMap: Record<string, string> = {
-      "Home": "all",
-      "Images": "photo",
-      "Documents": "document",
-      "Videos": "video",
-      "Audio": "audio",
-      "Voice Messages": "voice"
-    };
-    
-    // If we're in a virtual folder, select the corresponding filter
-    const currentFolderName = currentPath[currentPath.length - 1];
-    const filter = folderMap[currentFolderName] || "all";
-    
-    // Only update if it's different to prevent infinite loops
-    if (selectedFilter !== filter) {
-      setSelectedFilter(filter);
-    }
-  }, [currentPath, selectedFilter]);
 
   // Show error state with recovery options
   useEffect(() => {
@@ -400,15 +419,19 @@ export const FileExplorer = () => {
   const handleDownload = (item: FileItem) => {
     try {
       const baseUrl = getApiBaseUrl();
-      // Construct the download URL
+      // Construct the download URL - for the new path structure, we just need the file name
+      // The backend will handle extracting the file name from paths like /Home/Images/filename.jpg
+      const fileName = item.name;
       const downloadUrl = baseUrl 
-        ? `${baseUrl}/dl${item.file_path}` 
-        : `/dl${item.file_path}`;
+        ? `${baseUrl}/dl/${fileName}` 
+        : `/dl/${fileName}`;
       
       // Create a temporary link and trigger download
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = item.name;
+      // Add credentials for download requests
+      link.setAttribute('crossorigin', 'use-credentials');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -427,8 +450,12 @@ export const FileExplorer = () => {
       // Construct the correct path for the backend
       let backendPath = "/";
       if (currentPath.length > 1) {
-        // If we're in a nested folder, construct the full path
-        backendPath = `/${currentPath.slice(1).join('/')}`;
+        // For virtual folders, we need to construct the path differently
+        if (isVirtualFolder) {
+          backendPath = `/${currentPath.join('/')}`;
+        } else {
+          backendPath = `/${currentPath.slice(1).join('/')}`;
+        }
       }
       
       const baseUrl = getApiBaseUrl();
@@ -440,8 +467,9 @@ export const FileExplorer = () => {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include", // Add this to include cookies for authentication
         body: JSON.stringify({
-          file_path: item.file_path,
+          file_id: item.id,  // Use file_id instead of file_path
           new_name: newName,
         }),
       }, 3000); // 3 second timeout
@@ -470,8 +498,12 @@ export const FileExplorer = () => {
       // Construct the correct path for the backend
       let backendPath = "/";
       if (currentPath.length > 1) {
-        // If we're in a nested folder, construct the full path
-        backendPath = `/${currentPath.slice(1).join('/')}`;
+        // For virtual folders, we need to construct the path differently
+        if (isVirtualFolder) {
+          backendPath = `/${currentPath.join('/')}`;
+        } else {
+          backendPath = `/${currentPath.slice(1).join('/')}`;
+        }
       }
       
       const baseUrl = getApiBaseUrl();
@@ -483,9 +515,9 @@ export const FileExplorer = () => {
         headers: {
           "Content-Type": "application/json",
         },
-        credentials: "include",
+        credentials: "include", // Add this to include cookies for authentication
         body: JSON.stringify({
-          file_path: item.file_path,
+          file_id: item.id,  // Use file_id instead of file_path
         }),
       }, 3000); // 3 second timeout
 
@@ -507,6 +539,28 @@ export const FileExplorer = () => {
   const cancelDelete = () => {
     setDeleteDialog(null);
   };
+
+  // Determine the selected filter based on the current path
+  useEffect(() => {
+    // Map folder name to filter
+    const folderMap: Record<string, string> = {
+      "Home": "all",
+      "Images": "photo",
+      "Documents": "document",
+      "Videos": "video",
+      "Audio": "audio",
+      "Voice Messages": "voice"
+    };
+    
+    // If we're in a virtual folder, select the corresponding filter
+    const currentFolderName = currentPath[currentPath.length - 1];
+    const filter = folderMap[currentFolderName] || "all";
+    
+    // Only update if it's different to prevent infinite loops
+    if (selectedFilter !== filter) {
+      setSelectedFilter(filter);
+    }
+  }, [currentPath, selectedFilter]);
 
   return (
     <div className="flex h-screen bg-background text-foreground">

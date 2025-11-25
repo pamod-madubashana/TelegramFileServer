@@ -742,6 +742,50 @@ async def get_file_thumbnail(file_id: str, _: bool = Depends(require_auth)):
         logger.error(f"Error downloading file thumbnail: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Add a catch-all route to serve the frontend for client-side routing
+@app.get("/{full_path:path}")
+async def serve_frontend(request: Request, full_path: str):
+    """Serve the frontend application for all routes to support client-side routing"""
+    import os
+    # Get the directory where this file is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Navigate to the frontend build directory
+    frontend_dir = os.path.join(current_dir, "..", "..", "Frontend", "dist")
+    
+    # If we're in development mode, serve the Vite development server
+    # Check if we're in development by looking for the vite config
+    vite_config = os.path.join(current_dir, "..", "..", "Frontend", "vite.config.ts")
+    if os.path.exists(vite_config):
+        # In development, let the Vite proxy handle frontend requests
+        # This will be handled by the proxy in vite.config.ts
+        pass
+    
+    # Try to serve the built frontend files
+    if os.path.exists(frontend_dir):
+        import os
+        index_file = os.path.join(frontend_dir, "index.html")
+        if os.path.exists(index_file):
+            with open(index_file, "r", encoding="utf-8") as f:
+                content = f.read()
+                return Response(content=content, media_type="text/html")
+    
+    # Fallback to a simple response
+    return Response(
+        content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>File Server</title>
+        </head>
+        <body>
+            <div id="root"></div>
+            <script type="module" src="/src/main.tsx"></script>
+        </body>
+        </html>
+        """,
+        media_type="text/html"
+    )
+
 async def _web_server(bot_manager):
     # Store the bot manager instance for use in routes
     app.state.bot_manager = bot_manager
