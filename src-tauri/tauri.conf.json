@@ -29,5 +29,13 @@
     "icon": [
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "http": {
+      "permissions": [
+        "allow-fetch",
+        "allow-cookie"
+      ]
+    }
   }
 }

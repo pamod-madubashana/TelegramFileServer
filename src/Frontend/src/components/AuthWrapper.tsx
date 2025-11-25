@@ -30,6 +30,10 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         
         console.log("Checking authentication at:", `${apiUrl}/auth/check`);
         
+        // Check if we're running in Tauri
+        const isTauri = !!(window as any).__TAURI__;
+        console.log("Running in Tauri:", isTauri);
+        
         const response = await fetch(`${apiUrl}/auth/check`, {
           method: 'GET',
           credentials: 'include',

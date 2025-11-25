@@ -119,6 +119,10 @@ const Login = () => {
       
       console.log("Attempting login with baseUrl:", baseUrl);
       
+      // Check if we're running in Tauri
+      const isTauri = !!(window as any).__TAURI__;
+      console.log("Running in Tauri:", isTauri);
+      
       const response = await fetch(`${apiUrl}/auth/login`, {
         method: "POST",
         headers: {
@@ -134,6 +138,16 @@ const Login = () => {
       if (response.ok) {
         const responseData = await response.json();
         console.log("Login response data:", responseData);
+        
+        // For Tauri, we might need to manually handle cookies
+        if (isTauri) {
+          console.log("In Tauri environment, checking for Set-Cookie headers");
+          const setCookieHeader = response.headers.get('Set-Cookie');
+          if (setCookieHeader) {
+            console.log("Found Set-Cookie header:", setCookieHeader);
+          }
+        }
+        
         // Force a small delay to ensure session is properly set
         await new Promise(resolve => setTimeout(resolve, 100));
         console.log("Navigating to home page after successful login");
