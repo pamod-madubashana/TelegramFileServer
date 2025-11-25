@@ -77,12 +77,17 @@ class GoogleLoginRequest(BaseModel):
 # --- Authentication Routes ---
 @app.post("/api/auth/login")
 async def login_post_route(request: Request, login_data: LoginRequest):
+    logger.info(f"Login attempt for user: {login_data.username}")
     if verify_credentials(login_data.username, login_data.password):
         request.session["authenticated"] = True
         request.session["username"] = login_data.username
         request.session["auth_method"] = "local"
+        logger.info(f"Login successful for user: {login_data.username}")
+        # Log session data for debugging
+        logger.info(f"Session data after login: {dict(request.session)}")
         return {"message": "Login successful", "username": login_data.username}
     
+    logger.warning(f"Login failed for user: {login_data.username}")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Incorrect username or password",
@@ -111,8 +116,12 @@ async def logout_route(request: Request):
 
 @app.get("/api/auth/check")
 async def check_auth(request: Request):
+    # Log session data for debugging
+    logger.info(f"Auth check request. Session data: {dict(request.session)}")
+    authenticated = request.session.get("authenticated", False)
+    logger.info(f"Auth check result: authenticated={authenticated}")
     return {
-        "authenticated": request.session.get("authenticated", False),
+        "authenticated": authenticated,
         "username": request.session.get("username"),
         "user_picture": request.session.get("user_picture"),
         "is_admin": request.session.get("username") == "admin" or request.session.get("auth_method") == "local"
@@ -130,7 +139,7 @@ async def root():
 # Add a health check endpoint
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.datetime.now().isoformat()}
 
 # Add an OPTIONS endpoint for health check to handle preflight requests
 @app.options("/api/health")

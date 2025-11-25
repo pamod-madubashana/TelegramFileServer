@@ -117,6 +117,8 @@ const Login = () => {
       const baseUrl = getApiBaseUrl();
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
       
+      console.log("Attempting login with baseUrl:", baseUrl);
+      
       const response = await fetch(`${apiUrl}/auth/login`, {
         method: "POST",
         headers: {
@@ -126,12 +128,19 @@ const Login = () => {
         body: JSON.stringify({ username, password }),
       });
 
+      console.log("Login response status:", response.status);
+      console.log("Login response headers:", [...response.headers.entries()]);
+      
       if (response.ok) {
+        const responseData = await response.json();
+        console.log("Login response data:", responseData);
         // Force a small delay to ensure session is properly set
         await new Promise(resolve => setTimeout(resolve, 100));
+        console.log("Navigating to home page after successful login");
         navigate("/");
       } else {
         const errorData = await response.json();
+        console.log("Login failed with error:", errorData);
         setError(errorData.detail || "Login failed");
       }
     } catch (err) {
