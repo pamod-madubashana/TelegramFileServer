@@ -1,17 +1,18 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileItem } from "@/components/types";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
+
+// Define the request interface
+interface CopyMoveRequest {
+  file_id: string;
+  target_path: string;
+}
 
 interface ClipboardItem {
   item: FileItem;
   operation: "copy" | "cut";
   sourcePath: string;
-}
-
-interface CopyMoveRequest {
-  file_id: string;
-  target_path: string;
 }
 
 export const useFileOperations = () => {
@@ -43,14 +44,14 @@ export const useFileOperations = () => {
       };
 
       if (clipboard.operation === "copy") {
-        const response = await fetch(`${baseUrl}/files/copy`, {
+        const response = await fetchWithTimeout(`${baseUrl}/files/copy`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           credentials: "include",
           body: JSON.stringify(request),
-        });
+        }, 3000); // 3 second timeout
 
         if (!response.ok) {
           throw new Error("Failed to copy file");
@@ -60,14 +61,14 @@ export const useFileOperations = () => {
         queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
       } else {
         // Move operation
-        const response = await fetch(`${baseUrl}/files/move`, {
+        const response = await fetchWithTimeout(`${baseUrl}/files/move`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           credentials: "include",
           body: JSON.stringify(request),
-        });
+        }, 3000); // 3 second timeout
 
         if (!response.ok) {
           throw new Error("Failed to move file");

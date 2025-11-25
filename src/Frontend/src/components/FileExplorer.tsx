@@ -11,7 +11,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { RenameInput } from "./RenameInput";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
-import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -217,15 +217,16 @@ export const FileExplorer = () => {
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-      const response = await fetch(`${apiUrl}/files/delete`, {
+      
+      const response = await fetchWithTimeout(`${apiUrl}/files/delete`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify(request),
-      });
-      
+      }, 3000); // 3 second timeout
+
       if (!response.ok) {
         throw new Error("Failed to delete file");
       }
@@ -268,7 +269,8 @@ export const FileExplorer = () => {
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-      const response = await fetch(`${apiUrl}/files/rename`, {
+      
+      const response = await fetchWithTimeout(`${apiUrl}/files/rename`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -278,8 +280,8 @@ export const FileExplorer = () => {
           file_id: renamingItem.item.id,
           new_name: newName
         }),
-      });
-      
+      }, 3000); // 3 second timeout
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || "Failed to rename item");
@@ -327,15 +329,16 @@ export const FileExplorer = () => {
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-      const response = await fetch(`${apiUrl}/files/move`, {
+      
+      const response = await fetchWithTimeout(`${apiUrl}/files/move`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify(request),
-      });
-      
+      }, 3000); // 3 second timeout
+
       if (!response.ok) {
         throw new Error("Failed to move file");
       }
@@ -422,15 +425,16 @@ export const FileExplorer = () => {
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-      const response = await fetch(`${apiUrl}/files/move`, {
+      
+      const response = await fetchWithTimeout(`${apiUrl}/files/move`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify(request),
-      });
-      
+      }, 3000); // 3 second timeout
+
       if (!response.ok) {
         throw new Error("Failed to move file");
       }
@@ -491,7 +495,8 @@ export const FileExplorer = () => {
       const baseUrl = getApiBaseUrl();
       // For the default case, we need to append /api to the base URL
       const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-      const response = await fetch(`${apiUrl}/folders/create`, {
+      
+      const response = await fetchWithTimeout(`${apiUrl}/folders/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -500,7 +505,7 @@ export const FileExplorer = () => {
           folderName,
           currentPath: backendPath,
         }),
-      });
+      }, 3000); // 3 second timeout
 
       if (!response.ok) {
         const errorData = await response.json();

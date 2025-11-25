@@ -39,6 +39,12 @@ def verify_google_token(token: str) -> Optional[dict]:
         # Specify the CLIENT_ID of the app that accesses the backend:
         idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
         
+        # Check if the user's email is in the authorized admins list
+        user_email = idinfo['email']
+        if user_email not in AUTHORIZED_ADMINS:
+            logger.warning(f"Google user {user_email} is not in the authorized admins list")
+            return None
+        
         # ID token is valid. Get user info
         user_info = {
             "user_id": idinfo['sub'],

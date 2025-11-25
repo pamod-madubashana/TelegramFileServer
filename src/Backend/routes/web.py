@@ -94,7 +94,7 @@ async def google_login_route(request: Request, login_data: GoogleLoginRequest):
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid Google token",
+        detail="Invalid Google token or unauthorized user",
     )
 
 @app.post("/api/auth/logout")

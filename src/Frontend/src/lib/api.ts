@@ -77,14 +77,32 @@ export const getFullApiUrl = (endpoint: string): string => {
   return apiEndpoint;
 };
 
+// Utility function to implement fetch with timeout
+export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout: number = 3000): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
+};
+
 export const api = {
     async fetchFiles(path: string = '/'): Promise<FilesResponse> {
         const baseUrl = getApiBaseUrl();
         // For the default case, we need to append /api to the base URL
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-        const response = await fetch(`${apiUrl}/files?path=${encodeURIComponent(path)}`, {
+        const response = await fetchWithTimeout(`${apiUrl}/files?path=${encodeURIComponent(path)}`, {
             credentials: 'include', // Include cookies for session-based auth
-        });
+        }, 3000); // 3 second timeout
 
         if (!response.ok) {
             throw new Error(`Failed to fetch files: ${response.statusText}`);
@@ -97,9 +115,9 @@ export const api = {
         const baseUrl = getApiBaseUrl();
         // For the default case, we need to append /api to the base URL
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-        const response = await fetch(`${apiUrl}/auth/check`, {
+        const response = await fetchWithTimeout(`${apiUrl}/auth/check`, {
             credentials: 'include',
-        });
+        }, 3000); // 3 second timeout
 
         if (!response.ok) {
             throw new Error(`Failed to check auth: ${response.statusText}`);
