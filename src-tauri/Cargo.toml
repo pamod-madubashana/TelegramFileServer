@@ -5,16 +5,18 @@ description = "A Telegram Base Cloud Storage"
 authors = ["pamod_madubashana"]
 license = ""
 repository = ""
-edition = "2025"
+edition = "2021"
 rust-version = "1.70"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "1.5", features = [] }
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+tauri-plugin-dialog = "2.0"
 
 [features]
 default = [ "custom-protocol" ]
