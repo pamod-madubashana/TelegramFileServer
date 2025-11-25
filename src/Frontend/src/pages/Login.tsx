@@ -58,6 +58,8 @@ const Login = () => {
       });
 
       if (res.ok) {
+        // Force a small delay to ensure session is properly set
+        await new Promise(resolve => setTimeout(resolve, 100));
         navigate("/");
       } else {
         const errorData = await res.json();
@@ -125,6 +127,8 @@ const Login = () => {
       });
 
       if (response.ok) {
+        // Force a small delay to ensure session is properly set
+        await new Promise(resolve => setTimeout(resolve, 100));
         navigate("/");
       } else {
         const errorData = await response.json();

@@ -38,7 +38,13 @@ app = FastAPI(
 app.include_router(stream_router)
 
 # --- Middleware Setup ---
-app.add_middleware(SessionMiddleware, secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0")
+app.add_middleware(
+    SessionMiddleware, 
+    secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0",
+    same_site="lax",
+    https_only=False,
+    max_age=3600  # 1 hour session timeout
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

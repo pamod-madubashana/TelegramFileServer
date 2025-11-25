@@ -31,6 +31,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         console.log("Checking authentication at:", `${apiUrl}/auth/check`);
         
         const response = await fetch(`${apiUrl}/auth/check`, {
+          method: 'GET',
           credentials: 'include',
           // Add cache-busting to ensure we get fresh data
           cache: 'no-cache',

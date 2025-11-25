@@ -142,3 +142,21 @@ class WebServerManager:
                 
         except Exception as e:
             logger.error(f"Error during FastAPI cleanup: {e}")
+
+# Add a standalone function to run just the web server
+async def run_standalone_web_server():
+    """Run just the web server without the Telegram bot"""
+    web_manager = WebServerManager()
+    await web_manager.setup_web_server()
+    
+    # Keep the server running
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt, shutting down...")
+        await web_manager.cleanup()
+
+if __name__ == "__main__":
+    # Run the standalone web server
+    asyncio.run(run_standalone_web_server())
