@@ -266,7 +266,12 @@ export const FileExplorer = () => {
     };
     
     const folderName = folderMap[filter] || "Home";
-    setCurrentPath([folderName]);
+    // For virtual folders, we need to include the full path
+    if (folderName !== "Home") {
+      setCurrentPath(["Home", folderName]);
+    } else {
+      setCurrentPath([folderName]);
+    }
     setSelectedFilter(filter);
   };
 
