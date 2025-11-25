@@ -27,10 +27,6 @@ jobs:
       run: npm ci
       working-directory: src/Frontend
       
-    - name: Build frontend
-      run: npm run build
-      working-directory: src/Frontend
-      
     - name: Install Tauri CLI
       run: npm install -g @tauri-apps/cli
       
