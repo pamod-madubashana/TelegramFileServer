@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileItem } from "@/components/types";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface ClipboardItem {
   item: FileItem;
@@ -35,13 +36,14 @@ export const useFileOperations = () => {
     if (!clipboard) return;
 
     try {
+      const baseUrl = getApiBaseUrl();
       const request: CopyMoveRequest = {
         file_id: clipboard.item.id || "",
         target_path: targetPath
       };
 
       if (clipboard.operation === "copy") {
-        const response = await fetch("/api/files/copy", {
+        const response = await fetch(`${baseUrl}/files/copy`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -58,7 +60,7 @@ export const useFileOperations = () => {
         queryClient.invalidateQueries({ queryKey: ['files', targetPath] });
       } else {
         // Move operation
-        const response = await fetch("/api/files/move", {
+        const response = await fetch(`${baseUrl}/files/move`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

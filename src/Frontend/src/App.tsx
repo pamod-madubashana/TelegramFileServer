@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import { resetApiBaseUrl } from "./lib/api";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,22 @@ const App = () => {
     mediaQuery.addEventListener('change', handleChange);
 
     return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    // Add keyboard shortcut to reset API URL
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Alt+R to reset API URL
+      if (e.ctrlKey && e.altKey && e.key === 'r') {
+        e.preventDefault();
+        resetApiBaseUrl();
+        alert('API URL has been reset to default. The page will now reload.');
+        window.location.reload();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   return (

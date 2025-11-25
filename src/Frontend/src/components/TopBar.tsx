@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, ChevronDown, Search, Grid3x3, List, MoreHorizontal } from "lucide-react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
+import { SettingsWidget } from "./SettingsWidget";
 
 interface TopBarProps {
   currentPath: string[];
@@ -98,6 +99,7 @@ export const TopBar = ({
         </div>
 
         <div className="flex items-center gap-1">
+          <SettingsWidget />
           <Button
             variant={viewMode === "grid" ? "secondary" : "ghost"}
             size="icon"

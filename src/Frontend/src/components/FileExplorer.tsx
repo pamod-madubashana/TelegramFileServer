@@ -11,6 +11,11 @@ import { DeleteDialog } from "./DeleteDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { RenameInput } from "./RenameInput";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { getApiBaseUrl, resetApiBaseUrl, updateApiBaseUrl } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export const FileExplorer = () => {
   // Initialize currentPath from localStorage or default to ["Home"]
@@ -35,6 +40,9 @@ export const FileExplorer = () => {
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ item: FileItem; index: number } | null>(null);
   const [renamingItem, setRenamingItem] = useState<{ item: FileItem; index: number } | null>(null);
+  const [errorDialogOpen, setErrorDialogOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [newBackendUrl, setNewBackendUrl] = useState("");
   const queryClient = useQueryClient();
 
   // Save currentPath to localStorage whenever it changes
@@ -206,7 +214,10 @@ export const FileExplorer = () => {
         file_id: item.id || ""
       };
       
-      const response = await fetch("/api/files/delete", {
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const response = await fetch(`${apiUrl}/files/delete`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -254,7 +265,10 @@ export const FileExplorer = () => {
     
     try {
       // Call the rename API
-      const response = await fetch("/api/files/rename", {
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const response = await fetch(`${apiUrl}/files/rename`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -310,7 +324,10 @@ export const FileExplorer = () => {
         target_path: targetPath
       };
       
-      const response = await fetch("/api/files/move", {
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const response = await fetch(`${apiUrl}/files/move`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -348,7 +365,10 @@ export const FileExplorer = () => {
   const handleDownload = (item: FileItem) => {
     try {
       // Create the download URL using the file name
-      const downloadUrl = `/dl/${encodeURIComponent(item.name)}`;
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const downloadUrl = `${apiUrl}/dl/${encodeURIComponent(item.name)}`;
       
       // Create a temporary anchor element
       const link = document.createElement('a');
@@ -399,7 +419,10 @@ export const FileExplorer = () => {
         target_path: targetPath
       };
       
-      const response = await fetch("/api/files/move", {
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const response = await fetch(`${apiUrl}/files/move`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -465,7 +488,10 @@ export const FileExplorer = () => {
         backendPath = `/${currentPath.slice(1).join('/')}`;
       }
       
-      const response = await fetch("/api/folders/create", {
+      const baseUrl = getApiBaseUrl();
+      // For the default case, we need to append /api to the base URL
+      const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+      const response = await fetch(`${apiUrl}/folders/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -491,18 +517,34 @@ export const FileExplorer = () => {
     }
   };
 
-  // Show loading state
-  // Show error state
-  if (isError) {
-    return (
-      <div className="flex h-screen bg-background text-foreground items-center justify-center">
-        <div className="text-center">
-          <p className="text-destructive mb-4">Failed to load files</p>
-          <p className="text-sm text-muted-foreground">{error?.message || "Unknown error"}</p>
-        </div>
-      </div>
-    );
-  }
+  // Show error state with recovery options
+  useEffect(() => {
+    if (isError) {
+      const currentUrl = getApiBaseUrl();
+      setErrorMessage(`Failed to connect to backend server at ${currentUrl}. Please check the URL and try again.`);
+      setNewBackendUrl(currentUrl); // Pre-fill with current URL
+      setErrorDialogOpen(true);
+    }
+  }, [isError]);
+
+  const handleUrlChange = () => {
+    // Validate and update the backend URL
+    try {
+      // Allow "/" as a special case for same-origin requests
+      if (newBackendUrl === "/") {
+        updateApiBaseUrl("/");
+        window.location.reload();
+        return;
+      }
+      
+      // For full URLs, validate the format
+      new URL(newBackendUrl);
+      updateApiBaseUrl(newBackendUrl);
+      window.location.reload();
+    } catch {
+      toast.error("Please enter a valid URL (e.g., http://localhost:8000)");
+    }
+  };
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -561,6 +603,60 @@ export const FileExplorer = () => {
         onClose={() => setNewFolderDialogOpen(false)}
         onConfirm={handleNewFolder}
       />
+
+      {/* Custom Error Dialog with URL change option */}
+      <Dialog open={errorDialogOpen} onOpenChange={setErrorDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Connection Error</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground mb-4">
+              {errorMessage || "Failed to connect to the backend server. Please check your connection settings."}
+            </p>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="new-backend-url">New Backend URL</Label>
+                <Input
+                  id="new-backend-url"
+                  value={newBackendUrl}
+                  onChange={(e) => setNewBackendUrl(e.target.value)}
+                  placeholder="https://your-server.com"
+                />
+              </div>
+              <p className="text-sm font-mono bg-muted p-2 rounded">
+                Current URL: {getApiBaseUrl()}
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button onClick={handleUrlChange}>
+                  Change URL and Continue
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    resetApiBaseUrl();
+                    window.location.reload();
+                  }}
+                >
+                  Reset to Default Settings
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setErrorDialogOpen(false);
+                    refetch();
+                  }}
+                >
+                  Retry Connection
+                </Button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-4">
+              Tip: Press Ctrl+Alt+R to reset settings from anywhere
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
