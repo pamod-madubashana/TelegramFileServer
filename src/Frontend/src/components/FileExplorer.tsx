@@ -332,6 +332,28 @@ export const FileExplorer = () => {
     }
   };
 
+  // Determine the selected filter based on the current path
+  useEffect(() => {
+    // Map folder name to filter
+    const folderMap: Record<string, string> = {
+      "Home": "all",
+      "Images": "photo",
+      "Documents": "document",
+      "Videos": "video",
+      "Audio": "audio",
+      "Voice Messages": "voice"
+    };
+    
+    // If we're in a virtual folder, select the corresponding filter
+    const currentFolderName = currentPath[currentPath.length - 1];
+    const filter = folderMap[currentFolderName] || "all";
+    
+    // Only update if it's different to prevent infinite loops
+    if (selectedFilter !== filter) {
+      setSelectedFilter(filter);
+    }
+  }, [currentPath, selectedFilter]);
+
   // Show error state with recovery options
   useEffect(() => {
     if (isError) {
