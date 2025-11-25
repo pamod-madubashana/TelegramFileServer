@@ -12,6 +12,7 @@ import tempfile
 import logging
 import re
 import os
+import datetime
 from typing import List, Dict, Any
 
 # Set up logger to match your application's logging format
@@ -125,6 +126,16 @@ async def root():
         "status": "running",
         "docs_url": "/docs"
     }
+
+# Add a health check endpoint
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+# Add an OPTIONS endpoint for health check to handle preflight requests
+@app.options("/api/health")
+async def health_check_options():
+    return {"status": "ok"}
 
 # --- API Routes ---
 @app.get("/api/files")

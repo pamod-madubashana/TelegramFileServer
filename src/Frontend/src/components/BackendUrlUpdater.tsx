@@ -51,20 +51,19 @@ export const BackendUrlUpdater = ({ onErrorUpdate, onSuccess }: BackendUrlUpdate
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
       
       const response = await fetch(testUrl, {
-        method: 'OPTIONS',
+        method: 'GET', // Changed from OPTIONS to GET for better compatibility
         signal: controller.signal,
       });
       
       clearTimeout(timeoutId);
       
-      if (response.ok || response.status === 405) {
-        // 405 (Method Not Allowed) is acceptable as it means the endpoint exists
+      if (response.ok) {
         setTestResult({ success: true, message: "Connection successful!" });
       } else {
         setTestResult({ success: false, message: `Server responded with status ${response.status}` });
       }
     } catch (error) {
-    //   clearTimeout(timeoutId);
+      clearTimeout(timeoutId); // Make sure to clear the timeout
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           setTestResult({ success: false, message: "Connection timed out" });
