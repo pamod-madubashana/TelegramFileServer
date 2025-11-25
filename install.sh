@@ -103,15 +103,15 @@ EOF
     echo "  Logs:    journalctl -u $SERVICE_NAME -f -o cat"
 }
 
-# Function to install the prime command
-install_prime_command() {
-    echo "Installing prime command..."
+# Function to install the tgserver command
+install_tgserver_command() {
+    echo "Installing tgserver command..."
     
-    # Create the prime command script
-    sudo tee "/usr/local/bin/prime" > /dev/null <<'EOF'
+    # Create the tgserver command script
+    sudo tee "/usr/local/bin/tgserver" > /dev/null <<'EOF'
 #!/usr/bin/env python3
 """
-Prime - Easy command line interface for Telegram File Server
+tgserver - Easy command line interface for Telegram File Server
 """
 
 import sys
@@ -159,9 +159,9 @@ def send_sigint_to_service():
 
 def show_help():
     """Display help information"""
-    help_text = """Prime - Telegram File Server Manager
+    help_text = """tgserver - Telegram File Server Manager
 
-Usage: prime [command]
+Usage: tgserver [command]
 
 Commands:
   start     - Start the service
@@ -172,9 +172,9 @@ Commands:
   help      - Show this help message
 
 Examples:
-  prime start   - Start the bot service
-  prime logs    - View real-time logs
-  prime status  - Check if the bot is running
+  tgserver start   - Start the bot service
+  tgserver logs    - View real-time logs
+  tgserver status  - Check if the bot is running
 """
     print(help_text)
 
@@ -250,11 +250,11 @@ if __name__ == "__main__":
     main()
 EOF
 
-    # Make the prime command executable
-    sudo chmod +x "/usr/local/bin/prime"
+    # Make the tgserver command executable
+    sudo chmod +x "/usr/local/bin/tgserver"
     
-    echo "Prime command installed successfully!"
-    echo "You can now use: prime [start|stop|restart|status|logs|help]"
+    echo "tgserver command installed successfully!"
+    echo "You can now use: tgserver [start|stop|restart|status|logs|help]"
 }
 
 # Check if service already exists
@@ -264,8 +264,8 @@ else
     create_service
 fi
 
-# Install the prime command
-install_prime_command
+# Install the tgserver command
+install_tgserver_command
 
 # Run your main bot
 if [ "$1" = "--service" ]; then

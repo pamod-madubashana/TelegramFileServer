@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { getApiBaseUrl } from "@/lib/api";
 
 interface AuthWrapperProps {
@@ -9,10 +9,19 @@ interface AuthWrapperProps {
 export const AuthWrapper = ({ children }: AuthWrapperProps) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [backendError, setBackendError] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     console.log("AuthWrapper mounted, checking authentication...");
+    
+    // Skip auth check on login page
+    if (location.pathname === "/login") {
+      setIsLoading(false);
+      setIsAuthenticated(false);
+      return;
+    }
     
     const checkAuth = async () => {
       try {
@@ -38,27 +47,30 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           const data = await response.json();
           console.log("Auth check response data:", data);
           setIsAuthenticated(data.authenticated);
+          setBackendError(false);
           
-          // Always redirect to login if not authenticated, regardless of what the API says
+          // If not authenticated, redirect to login
           if (!data.authenticated) {
             console.log("Not authenticated, redirecting to login");
-            window.location.href = "/login";
+            navigate("/login");
             return;
           } else {
             console.log("User is authenticated, showing content");
           }
         } else {
           console.log("Auth check failed with status:", response.status);
-          // Even if the response is not OK, redirect to login
+          // Redirect to login but indicate there might be a backend issue
           setIsAuthenticated(false);
-          window.location.href = "/login";
+          setBackendError(response.status !== 401 && response.status !== 403);
+          navigate("/login");
           return;
         }
       } catch (error) {
         console.error("Auth check failed with error:", error);
-        // Even if there's an error, redirect to login
+        // Redirect to login and indicate there's a backend connectivity issue
         setIsAuthenticated(false);
-        window.location.href = "/login";
+        setBackendError(true);
+        navigate("/login");
         return;
       } finally {
         setIsLoading(false);
@@ -66,7 +78,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
     };
 
     checkAuth();
-  }, [navigate]);
+  }, [navigate, location.pathname]);
 
   // Show loading state while checking authentication
   if (isLoading || isAuthenticated === null) {

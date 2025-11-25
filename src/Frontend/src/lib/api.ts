@@ -125,4 +125,20 @@ export const api = {
 
         return response.json();
     },
+
+    async logout() {
+        const baseUrl = getApiBaseUrl();
+        // For the default case, we need to append /api to the base URL
+        const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
+        const response = await fetchWithTimeout(`${apiUrl}/auth/logout`, {
+            method: 'POST',
+            credentials: 'include',
+        }, 3000); // 3 second timeout
+
+        if (!response.ok) {
+            throw new Error(`Failed to logout: ${response.statusText}`);
+        }
+
+        return response.json();
+    },
 };

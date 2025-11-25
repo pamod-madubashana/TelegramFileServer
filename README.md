@@ -88,11 +88,11 @@ chmod +x install.sh
 
 This creates a service named `telegram-file-server` that can be managed with:
 ```bash
-prime start     # Start the service
-prime stop      # Stop the service
-prime restart   # Restart the service
-prime status    # Check service status
-prime logs      # View live logs
+tgserver start     # Start the service
+tgserver stop      # Stop the service
+tgserver restart   # Restart the service
+tgserver status    # Check service status
+tgserver logs      # View live logs
 ```
 
 #### Using Docker
