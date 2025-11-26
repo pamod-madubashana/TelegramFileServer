@@ -6,8 +6,8 @@
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:8080",
-    "beforeBuildCommand": "",
-    "frontendDist": "./dist"
+    "beforeBuildCommand": "cd .. && npm run build",
+    "frontendDist": "../Frontend/dist"
   },
   "app": {
     "windows": [
@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "./dist/**/*"
+      "../Frontend/dist/**/*"
     ]
   },
   "plugins": {

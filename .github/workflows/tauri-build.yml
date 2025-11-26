@@ -27,41 +27,6 @@ jobs:
       run: npm ci
       working-directory: src/Frontend
       
-    - name: Build frontend
-      run: npm run build
-      working-directory: src/Frontend
-      
-    - name: Verify frontend build
-      run: |
-        if (Test-Path "dist") {
-          Write-Output "Frontend build successful"
-          Get-ChildItem -Path "dist" -Force
-        } else {
-          Write-Output "Frontend build failed - dist directory not found"
-          exit 1
-        }
-      shell: pwsh
-      working-directory: src/Frontend
-      
-    - name: Copy frontend assets for bundling
-      run: |
-        # Ensure we're in the correct directory
-        Write-Output "Current location: $(Get-Location)"
-        # Create the dist directory in src-tauri if it doesn't exist
-        $distPath = "..\src-tauri\dist"
-        if (!(Test-Path $distPath)) {
-          New-Item -ItemType Directory -Force -Path $distPath
-          Write-Output "Created directory: $distPath"
-        } else {
-          Write-Output "Directory already exists: $distPath"
-        }
-        # Copy the built frontend assets to the expected location for bundling
-        Copy-Item -Path "dist\*" -Destination $distPath -Recurse -Force
-        Write-Output "Frontend assets copied to $distPath"
-        Get-ChildItem -Path $distPath -Force
-      shell: pwsh
-      working-directory: src/Frontend
-      
     - name: Install Tauri CLI
       run: npm install -g @tauri-apps/cli
         
