@@ -5,19 +5,21 @@
   "identifier": "com.telegram.fileserver",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "",
+    "devUrl": "http://localhost:8080",
+    "beforeBuildCommand": "cd ../Frontend && npm run build",
     "frontendDist": "../src/Frontend/dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Telegram File Server",
         "width": 1200,
         "height": 800,
         "resizable": true,
         "fullscreen": false,
-        "visible": true
+        "visible": true,
+        "decorations": true
       }
     ],
     "security": {

@@ -1,5 +1,5 @@
-// Enable console window for debugging logs in Windows
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Always show console window for debugging - removed conditional compilation
+#![windows_subsystem = "console"]
 
 use std::io::Write;
 
@@ -17,15 +17,54 @@ fn main() {
     .init();
   
   log::info!("Starting Telegram File Server application");
+  log::info!("Current working directory: {:?}", std::env::current_dir());
   
-  tauri::Builder::default()
+  // Log environment variables that might be relevant
+  if let Ok(rust_log) = std::env::var("RUST_LOG") {
+    log::info!("RUST_LOG environment variable: {}", rust_log);
+  }
+  
+  // Check if frontend dist directory exists
+  let frontend_dist_path = "../src/Frontend/dist";
+  if std::path::Path::new(frontend_dist_path).exists() {
+    log::info!("Frontend dist directory exists: {}", frontend_dist_path);
+  } else {
+    log::error!("Frontend dist directory does not exist: {}", frontend_dist_path);
+  }
+  
+  // Generate context and log information about it
+  log::info!("Generating Tauri context...");
+  let context = tauri::generate_context!();
+  log::info!("Context generated successfully");
+  log::info!("Package name: {}", context.package_info().name);
+  log::info!("Package version: {}", context.package_info().version);
+  
+  // Check if the frontend index.html exists
+  let index_html_path = format!("{}/index.html", frontend_dist_path);
+  if std::path::Path::new(&index_html_path).exists() {
+    log::info!("Frontend index.html exists: {}", index_html_path);
+  } else {
+    log::error!("Frontend index.html does not exist: {}", index_html_path);
+  }
+  
+  let result = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_http::init())
     .setup(|_app| {
-      log::info!("Application setup completed");
+      log::info!("Application setup completed successfully");
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .run(context);
+    
+  match result {
+    Ok(_) => {
+      log::info!("Application exited successfully");
+    },
+    Err(e) => {
+      log::error!("Application exited with error: {}", e);
+      log::error!("Error details: {:?}", e);
+      std::process::exit(1);
+    }
+  }
 }
