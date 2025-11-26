@@ -177,11 +177,12 @@ const Login = () => {
         
         // For Tauri, we might need to manually handle cookies
         if (isTauri) {
-          sendLogToBackend("In Tauri environment, checking for Set-Cookie headers");
-          const setCookieHeader = response.headers.get('Set-Cookie');
-          if (setCookieHeader) {
-            sendLogToBackend("Found Set-Cookie header", setCookieHeader);
-          }
+          sendLogToBackend("In Tauri environment, storing auth state locally");
+          localStorage.setItem('tauri_auth_token', JSON.stringify({ 
+            authenticated: true, 
+            username: responseData.username,
+            timestamp: new Date().toISOString()
+          }));
         }
         
         // Force a small delay to ensure session is properly set

@@ -43,14 +43,33 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
     
     const checkAuth = async () => {
       try {
+        // Check if we're running in Tauri
+        const isTauri = !!(window as any).__TAURI__;
+        sendLogToBackend("Running in Tauri environment", isTauri);
+        
+        // In Tauri, first check localStorage for auth token
+        if (isTauri) {
+          const tauri_auth = localStorage.getItem('tauri_auth_token');
+          if (tauri_auth) {
+            try {
+              const authData = JSON.parse(tauri_auth);
+              if (authData.authenticated) {
+                sendLogToBackend("Found valid auth token in Tauri localStorage", authData);
+                setIsAuthenticated(true);
+                setBackendError(false);
+                setIsLoading(false);
+                return;
+              }
+            } catch (e) {
+              sendLogToBackend("Failed to parse Tauri auth token", e);
+            }
+          }
+        }
+        
         const baseUrl = getApiBaseUrl();
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
         
         sendLogToBackend("Checking authentication", { url: `${apiUrl}/auth/check`, baseUrl });
-        
-        // Check if we're running in Tauri
-        const isTauri = !!(window as any).__TAURI__;
-        sendLogToBackend("Running in Tauri environment", isTauri);
         
         const response = await fetch(`${apiUrl}/auth/check`, {
           method: 'GET',
@@ -74,15 +93,31 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           // If not authenticated, redirect to login
           if (!data.authenticated) {
             sendLogToBackend("Not authenticated, redirecting to login");
+            // Clear Tauri auth token if it exists
+            if (isTauri) {
+              localStorage.removeItem('tauri_auth_token');
+            }
             navigate("/login");
             return;
           } else {
             sendLogToBackend("User is authenticated, showing content");
+            // Update Tauri auth token
+            if (isTauri) {
+              localStorage.setItem('tauri_auth_token', JSON.stringify({ 
+                authenticated: true, 
+                username: data.username,
+                timestamp: new Date().toISOString()
+              }));
+            }
           }
         } else {
           sendLogToBackend("Auth check failed with status", response.status);
           // Redirect to login but indicate there might be a backend issue
           setIsAuthenticated(false);
+          // Clear Tauri auth token on failure
+          if (isTauri) {
+            localStorage.removeItem('tauri_auth_token');
+          }
           setBackendError(response.status !== 401 && response.status !== 403);
           navigate("/login");
           return;
@@ -91,6 +126,10 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         sendLogToBackend("Auth check failed with error", error);
         // Redirect to login and indicate there's a backend connectivity issue
         setIsAuthenticated(false);
+        // Clear Tauri auth token on error
+        if (isTauri) {
+          localStorage.removeItem('tauri_auth_token');
+        }
         setBackendError(true);
         navigate("/login");
         return;

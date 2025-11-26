@@ -42,4 +42,10 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
+  // Configure for Tauri - serve index.html for all routes
+  preview: {
+    port: 8080,
+    strictPort: false,
+    middlewareMode: false,
+  },
 }));
