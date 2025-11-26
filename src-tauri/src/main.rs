@@ -2,6 +2,7 @@
 #![windows_subsystem = "console"]
 
 use std::io::Write;
+use std::path::Path;
 
 fn main() {
   // Initialize logging with custom format
@@ -24,12 +25,34 @@ fn main() {
     log::info!("RUST_LOG environment variable: {}", rust_log);
   }
   
-  // Check if frontend dist directory exists
-  let frontend_dist_path = "../src/Frontend/dist";
-  if std::path::Path::new(frontend_dist_path).exists() {
-    log::info!("Frontend dist directory exists: {}", frontend_dist_path);
+  // Check for frontend dist directory - try multiple possible locations
+  let possible_paths = vec![
+    "../Frontend/dist",           // Development path
+    "../src/Frontend/dist",      // Alternative development path
+    "./frontend-dist",           // Bundled path
+    "./dist"                     // Alternative bundled path
+  ];
+  
+  let mut frontend_dist_path = "";
+  for path in &possible_paths {
+    if Path::new(path).exists() {
+      log::info!("Found frontend dist directory: {}", path);
+      frontend_dist_path = path;
+      break;
+    }
+  }
+  
+  if frontend_dist_path.is_empty() {
+    log::error!("Frontend dist directory not found in any expected location");
+    log::info!("Checked paths: {:?}", possible_paths);
   } else {
-    log::error!("Frontend dist directory does not exist: {}", frontend_dist_path);
+    // Check if the frontend index.html exists
+    let index_html_path = format!("{}/index.html", frontend_dist_path);
+    if Path::new(&index_html_path).exists() {
+      log::info!("Frontend index.html exists: {}", index_html_path);
+    } else {
+      log::error!("Frontend index.html does not exist: {}", index_html_path);
+    }
   }
   
   // Generate context and log information about it
@@ -38,14 +61,6 @@ fn main() {
   log::info!("Context generated successfully");
   log::info!("Package name: {}", context.package_info().name);
   log::info!("Package version: {}", context.package_info().version);
-  
-  // Check if the frontend index.html exists
-  let index_html_path = format!("{}/index.html", frontend_dist_path);
-  if std::path::Path::new(&index_html_path).exists() {
-    log::info!("Frontend index.html exists: {}", index_html_path);
-  } else {
-    log::error!("Frontend index.html does not exist: {}", index_html_path);
-  }
   
   let result = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())

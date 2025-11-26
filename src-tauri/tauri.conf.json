@@ -7,7 +7,7 @@
     "beforeDevCommand": "",
     "devUrl": "http://localhost:8080",
     "beforeBuildCommand": "",
-    "frontendDist": "../src/Frontend/dist"
+    "frontendDist": "../Frontend/dist"
   },
   "app": {
     "windows": [
@@ -31,17 +31,38 @@
     "targets": "all",
     "icon": [
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [
+      "./frontend-dist/**/*"
+    ],
+    "externalBin": [],
+    "copyright": "",
+    "category": "DeveloperTool",
+    "shortDescription": "",
+    "longDescription": "",
+    "deb": {
+      "depends": []
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
   },
   "plugins": {
     "http": {
       "permissions": [
         "allow-fetch",
         "allow-cookie"
-      ],
-      "defaultHeaders": {
-        "withCredentials": true
-      }
+      ]
     }
   }
 }
