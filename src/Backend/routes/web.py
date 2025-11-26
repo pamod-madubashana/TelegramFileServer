@@ -13,13 +13,14 @@ import logging
 import re
 import os
 import datetime
+import hashlib
 from typing import List, Dict, Any
 
 # Set up logger to match your application's logging format
 from d4rk.Logs import setup_logger
 logger = setup_logger("web_server")
 
-from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token
+from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token, ADMIN_PASSWORD_HASH
 from .api_routes import list_media_api, delete_media_api, update_media_api, delete_movie_quality_api, delete_tv_quality_api, delete_tv_episode_api, delete_tv_season_api
 from .stream_routes import router as stream_router
 
