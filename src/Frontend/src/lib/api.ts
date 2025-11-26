@@ -38,7 +38,14 @@ export const getApiBaseUrl = (): string => {
   
   // Return default URL (port 8000)
   if (typeof window !== 'undefined') {
-    // Assume backend is on port 8000
+    // Check if running in Tauri
+    const isTauri = !!(window as any).__TAURI__;
+    if (isTauri) {
+      // In Tauri, always use localhost:8000 by default
+      return 'http://localhost:8000';
+    }
+    
+    // Assume backend is on port 8000 for web
     const url = new URL(window.location.origin);
     url.port = "8000";
     return url.origin;
