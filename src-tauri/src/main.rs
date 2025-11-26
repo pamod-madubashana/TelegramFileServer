@@ -25,7 +25,7 @@ fn main() {
   }
   
   // Check if frontend dist directory exists
-  let frontend_dist_path = "../../src/Frontend/dist";
+  let frontend_dist_path = "../Frontend/dist";
   if std::path::Path::new(frontend_dist_path).exists() {
     log::info!("Frontend dist directory exists: {}", frontend_dist_path);
   } else {

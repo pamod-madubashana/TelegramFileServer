@@ -31,6 +31,18 @@ jobs:
       run: npm run build
       working-directory: src/Frontend
       
+    - name: Verify frontend build
+      run: |
+        if (Test-Path "dist") {
+          Write-Output "Frontend build successful"
+          Get-ChildItem -Path "dist" -Force
+        } else {
+          Write-Output "Frontend build failed - dist directory not found"
+          exit 1
+        }
+      shell: pwsh
+      working-directory: src/Frontend
+      
     - name: Install Tauri CLI
       run: npm install -g @tauri-apps/cli
         

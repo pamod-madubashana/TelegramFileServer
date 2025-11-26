@@ -7,7 +7,7 @@
     "beforeDevCommand": "",
     "devUrl": "http://localhost:8080",
     "beforeBuildCommand": "",
-    "frontendDist": "../../src/Frontend/dist"
+    "frontendDist": "../Frontend/dist"
   },
   "app": {
     "windows": [
