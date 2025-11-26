@@ -25,27 +25,10 @@ fn main() {
     log::info!("RUST_LOG environment variable: {}", rust_log);
   }
   
-  // Check for frontend dist directory - try multiple possible locations
-  let possible_paths = vec![
-    "../Frontend/dist",           // Development path
-    "../src/Frontend/dist",      // Alternative development path
-    "./frontend-dist",           // Bundled path
-    "./dist"                     // Alternative bundled path
-  ];
-  
-  let mut frontend_dist_path = "";
-  for path in &possible_paths {
-    if Path::new(path).exists() {
-      log::info!("Found frontend dist directory: {}", path);
-      frontend_dist_path = path;
-      break;
-    }
-  }
-  
-  if frontend_dist_path.is_empty() {
-    log::error!("Frontend dist directory not found in any expected location");
-    log::info!("Checked paths: {:?}", possible_paths);
-  } else {
+  // Check for frontend dist directory - use the correct path according to project memory
+  let frontend_dist_path = "../src/Frontend/dist";
+  if Path::new(frontend_dist_path).exists() {
+    log::info!("Found frontend dist directory: {}", frontend_dist_path);
     // Check if the frontend index.html exists
     let index_html_path = format!("{}/index.html", frontend_dist_path);
     if Path::new(&index_html_path).exists() {
@@ -53,6 +36,8 @@ fn main() {
     } else {
       log::error!("Frontend index.html does not exist: {}", index_html_path);
     }
+  } else {
+    log::error!("Frontend dist directory not found: {}", frontend_dist_path);
   }
   
   // Generate context and log information about it
