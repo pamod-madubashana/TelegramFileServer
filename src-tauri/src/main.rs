@@ -2,7 +2,6 @@
 #![windows_subsystem = "console"]
 
 use std::io::Write;
-use std::path::PathBuf;
 
 fn main() {
   // Initialize logging with custom format
@@ -36,15 +35,8 @@ fn main() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![])
-    .setup(|app| {
+    .setup(|_app| {
       log::info!("Application setup completed successfully");
-      
-      // Set up a custom window protocol for SPA routing
-      let window = app.get_webview_window("main");
-      if let Some(_window) = window {
-        log::info!("Main window initialized");
-      }
-      
       Ok(())
     })
     .run(context);
