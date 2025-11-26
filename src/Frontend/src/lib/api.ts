@@ -77,8 +77,42 @@ export const getFullApiUrl = (endpoint: string): string => {
   return apiEndpoint;
 };
 
+// Import Tauri HTTP plugin
+let http: typeof import('@tauri-apps/plugin-http') | null = null;
+let isTauriEnv = false;
+
+// Check if we're running in Tauri
+if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+  isTauriEnv = true;
+  // Dynamically import the HTTP plugin only in Tauri environment
+  import('@tauri-apps/plugin-http').then((module) => {
+    http = module;
+  }).catch((error) => {
+    console.error('Failed to load Tauri HTTP plugin:', error);
+  });
+}
+
 // Utility function to implement fetch with timeout
 export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout: number = 3000): Promise<Response> => {
+  // Use Tauri HTTP plugin if available (in Tauri environment)
+  if (isTauriEnv && http) {
+    try {
+      // Make the request using Tauri's HTTP plugin
+      const response = await http.fetch(url, {
+        method: options.method || 'GET',
+        headers: options.headers as Record<string, string>,
+        body: options.body as string,
+      });
+      
+      // Return the response directly as it's already a standard Response object
+      return response;
+    } catch (error) {
+      console.error('Tauri HTTP request failed:', error);
+      // Fall back to standard fetch if Tauri HTTP fails
+    }
+  }
+  
+  // Standard browser fetch with timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   

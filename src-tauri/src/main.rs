@@ -43,6 +43,7 @@ fn main() {
   }
   
   if frontend_dist_path.is_empty() {
+    log::error!("Frontend dist directory not found in any expected location");
     log::info!("Checked paths: {:?}", possible_paths);
     
     // Try to find the executable directory and look for assets there
@@ -71,6 +72,8 @@ fn main() {
     } else {
       log::error!("Frontend index.html does not exist: {}", index_html_path);
     }
+  } else {
+    log::error!("Frontend dist directory not found in any expected location");
   }
   
   // Generate context and log information about it
