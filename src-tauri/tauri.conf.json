@@ -7,7 +7,7 @@
     "beforeDevCommand": "",
     "devUrl": "http://localhost:8080",
     "beforeBuildCommand": "",
-    "frontendDist": "../Frontend/dist"
+    "frontendDist": "../src/Frontend/dist"
   },
   "app": {
     "windows": [
@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../Frontend/dist/**/*"
+      "../src/Frontend/dist/**/*"
     ]
   },
   "plugins": {

@@ -25,7 +25,7 @@ fn main() {
     log::info!("RUST_LOG environment variable: {}", rust_log);
   }
   
-  // Check for frontend dist directory - use the correct path according to project memory
+  // Check for frontend dist directory - use the correct path
   let frontend_dist_path = "../src/Frontend/dist";
   if Path::new(frontend_dist_path).exists() {
     log::info!("Found frontend dist directory: {}", frontend_dist_path);
