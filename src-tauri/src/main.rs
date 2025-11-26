@@ -29,7 +29,7 @@ fn main() {
   let possible_paths = vec![
     "../src/Frontend/dist",      // Development path
     "./src/Frontend/dist",       // Installed path (bundled)
-    "./frontend",                // Alternative bundled path
+    "./dist",                    // Alternative bundled path
     "../Frontend/dist"          // Alternative development path
   ];
   
@@ -45,6 +45,19 @@ fn main() {
   if frontend_dist_path.is_empty() {
     log::error!("Frontend dist directory not found in any expected location");
     log::info!("Checked paths: {:?}", possible_paths);
+    
+    // Try to find the executable directory and look for assets there
+    if let Ok(exe_path) = std::env::current_exe() {
+      if let Some(parent) = exe_path.parent() {
+        let bundled_dist_path = parent.join("src").join("Frontend").join("dist");
+        if bundled_dist_path.exists() {
+          log::info!("Found bundled frontend dist directory: {:?}", bundled_dist_path);
+          frontend_dist_path = bundled_dist_path.to_str().unwrap_or("");
+        } else {
+          log::info!("Bundled frontend dist directory not found at: {:?}", bundled_dist_path);
+        }
+      }
+    }
   } else {
     // Check if the frontend index.html exists
     let index_html_path = format!("{}/index.html", frontend_dist_path);
@@ -65,8 +78,7 @@ fn main() {
   let result = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_devtools::init())
-    .setup(|app| {
+    .setup(|_app| {
       log::info!("Application setup completed successfully");
       Ok(())
     })
