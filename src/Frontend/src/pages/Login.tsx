@@ -181,6 +181,7 @@ const Login = () => {
           localStorage.setItem('tauri_auth_token', JSON.stringify({ 
             authenticated: true, 
             username: responseData.username,
+            auth_token: responseData.auth_token,
             timestamp: new Date().toISOString()
           }));
         }

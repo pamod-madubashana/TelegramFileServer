@@ -93,9 +93,15 @@ def is_admin(request: Request) -> bool:
     return False
 
 def require_auth(request: Request):
-    if not is_authenticated(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return True
+    # Check session first
+    if request.session.get("authenticated"):
+        return True
+    
+    # Check if authenticated via token (from middleware)
+    if hasattr(request.state, 'authenticated_via_token') and request.state.authenticated_via_token:
+        return True
+    
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 def require_admin(request: Request):
     """Require admin privileges"""

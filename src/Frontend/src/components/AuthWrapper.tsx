@@ -71,15 +71,30 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         
         sendLogToBackend("Checking authentication", { url: `${apiUrl}/auth/check`, baseUrl });
         
+        // Prepare headers for auth check
+        const headers: any = {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        };
+        
+        // If Tauri and we have a token, add it to headers
+        if (isTauri && tauri_auth) {
+          try {
+            const authData = JSON.parse(tauri_auth);
+            if (authData.auth_token) {
+              headers['X-Auth-Token'] = authData.auth_token;
+              sendLogToBackend("Adding auth token to request headers");
+            }
+          } catch (e) {
+            sendLogToBackend("Failed to extract auth token from localStorage", e);
+          }
+        }
+        
         const response = await fetch(`${apiUrl}/auth/check`, {
           method: 'GET',
           credentials: 'include',
-          // Add cache-busting to ensure we get fresh data
           cache: 'no-cache',
-          headers: {
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          }
+          headers
         });
 
         sendLogToBackend("Auth check response", { status: response.status, headers: [...response.headers.entries()] });

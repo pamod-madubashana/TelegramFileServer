@@ -14,6 +14,8 @@ import re
 import os
 import datetime
 import hashlib
+import secrets
+from typing import Dict, Optional
 from typing import List, Dict, Any
 
 # Set up logger to match your application's logging format
@@ -30,6 +32,10 @@ from dataclasses import asdict
 
 # Global variable for workloads (if used by other modules, otherwise just for get_workloads)
 work_loads = {}
+
+# Simple in-memory token store for Tauri/desktop app authentication
+# Maps tokens to session data
+_auth_tokens: Dict[str, Dict] = {}
 
 app = FastAPI(
     title=f"{APP_NAME} Media Server",
@@ -54,6 +60,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Add auth token middleware for Tauri/desktop app support ---
+@app.middleware("http")
+async def auth_token_middleware(request: Request, call_next):
+    """Handle token-based authentication for Tauri/desktop apps"""
+    auth_header = request.headers.get("X-Auth-Token")
+    if auth_header and auth_header in _auth_tokens:
+        token_data = _auth_tokens[auth_header]
+        # Add token data to session-like storage for the route handlers
+        request.state.auth_token_data = token_data
+        request.state.authenticated_via_token = True
+        logger.debug(f"Authenticated via auth token for user: {token_data.get('username')}")
+    return await call_next(request)
 
 # --- Add logging middleware ---
 @app.middleware("http")
@@ -92,7 +111,21 @@ async def login_post_route(request: Request, login_data: LoginRequest):
         logger.info(f"Login successful for user: {login_data.username}")
         # Log session data for debugging
         logger.info(f"Session data after login: {dict(request.session)}")
-        return {"message": "Login successful", "username": login_data.username}
+        
+        # Generate a token for Tauri/desktop app usage
+        auth_token = secrets.token_urlsafe(32)
+        _auth_tokens[auth_token] = {
+            "authenticated": True,
+            "username": login_data.username,
+            "auth_method": "local",
+            "created_at": datetime.datetime.now().isoformat()
+        }
+        
+        return {
+            "message": "Login successful",
+            "username": login_data.username,
+            "auth_token": auth_token  # Return token for Tauri/desktop apps
+        }
     
     logger.warning(f"Login failed for user: {login_data.username}")
     logger.info(f"Expected username: 'admin', Provided username: '{login_data.username}'")
@@ -121,13 +154,34 @@ async def google_login_route(request: Request, login_data: GoogleLoginRequest):
 
 @app.post("/api/auth/logout")
 async def logout_route(request: Request):
+    # Clear session
     request.session.clear()
+    
+    # Clear token if provided in headers
+    auth_header = request.headers.get("X-Auth-Token")
+    if auth_header and auth_header in _auth_tokens:
+        del _auth_tokens[auth_header]
+        logger.info(f"Cleared auth token on logout")
+    
     return {"message": "Logged out successfully"}
 
 @app.get("/api/auth/check")
 async def check_auth(request: Request):
     # Log session data for debugging
     logger.info(f"Auth check request. Session data: {dict(request.session)}")
+    
+    # Check if there's an auth token in headers (for Tauri/desktop apps)
+    auth_header = request.headers.get("X-Auth-Token")
+    if auth_header and auth_header in _auth_tokens:
+        token_data = _auth_tokens[auth_header]
+        logger.info(f"Auth check result using token: authenticated=True, user={token_data.get('username')}")
+        return {
+            "authenticated": True,
+            "username": token_data.get("username"),
+            "user_picture": token_data.get("user_picture"),
+            "is_admin": token_data.get("username") == "admin" or token_data.get("auth_method") == "local"
+        }
+    
     authenticated = request.session.get("authenticated", False)
     logger.info(f"Auth check result: authenticated={authenticated}")
     return {
