@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../src/Frontend/dist/**/*"
+      "../src/Frontend/dist"
     ]
   },
   "plugins": {
