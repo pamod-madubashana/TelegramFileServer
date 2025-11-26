@@ -21,10 +21,17 @@ AUTHORIZED_ADMINS = AUTHORIZED_ADMIN_EMAILS
 security = HTTPBearer(auto_error=False)
 
 def verify_password(password: str) -> bool:
-    return hashlib.sha256(password.encode()).hexdigest() == ADMIN_PASSWORD_HASH
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    logger.info(f"Verifying password. Expected hash: {ADMIN_PASSWORD_HASH}, Provided hash: {password_hash}")
+    return password_hash == ADMIN_PASSWORD_HASH
 
 def verify_credentials(username: str, password: str) -> bool:
-    return username == USERNAME and verify_password(password)
+    logger.info(f"Verifying credentials for username: '{username}'")
+    logger.info(f"Expected username: '{USERNAME}'")
+    is_username_valid = username == USERNAME
+    is_password_valid = verify_password(password)
+    logger.info(f"Username valid: {is_username_valid}, Password valid: {is_password_valid}")
+    return is_username_valid and is_password_valid
 
 def verify_google_token(token: str) -> Optional[dict]:
     """Verify Google ID token and return user info if valid"""
@@ -64,7 +71,10 @@ def verify_google_token(token: str) -> Optional[dict]:
         return None
 
 def is_authenticated(request: Request) -> bool:
-    return request.session.get("authenticated", False)
+    auth_status = request.session.get("authenticated", False)
+    logger.info(f"Checking authentication status: {auth_status}")
+    logger.info(f"Session data: {dict(request.session)}")
+    return auth_status
 
 def is_admin(request: Request) -> bool:
     """Check if the authenticated user is an admin"""

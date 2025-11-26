@@ -78,7 +78,13 @@ class GoogleLoginRequest(BaseModel):
 @app.post("/api/auth/login")
 async def login_post_route(request: Request, login_data: LoginRequest):
     logger.info(f"Login attempt for user: {login_data.username}")
-    if verify_credentials(login_data.username, login_data.password):
+    logger.info(f"Login data received: {login_data}")
+    
+    # Log the verification process
+    is_valid = verify_credentials(login_data.username, login_data.password)
+    logger.info(f"Credentials verification result: {is_valid}")
+    
+    if is_valid:
         request.session["authenticated"] = True
         request.session["username"] = login_data.username
         request.session["auth_method"] = "local"
@@ -88,6 +94,9 @@ async def login_post_route(request: Request, login_data: LoginRequest):
         return {"message": "Login successful", "username": login_data.username}
     
     logger.warning(f"Login failed for user: {login_data.username}")
+    logger.info(f"Expected username: 'admin', Provided username: '{login_data.username}'")
+    logger.info(f"Expected password hash: {ADMIN_PASSWORD_HASH}")
+    logger.info(f"Provided password hash: {hashlib.sha256(login_data.password.encode()).hexdigest()}")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Incorrect username or password",

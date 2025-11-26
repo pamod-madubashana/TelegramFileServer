@@ -2,6 +2,23 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getApiBaseUrl } from "@/lib/api";
 
+// Function to send logs to backend
+const sendLogToBackend = async (message: string, data?: any) => {
+  try {
+    // Check if we're in Tauri environment
+    const isTauri = !!(window as any).__TAURI__;
+    if (isTauri) {
+      // In Tauri, we could use the event system to send logs to the backend
+      // For now, we'll just console.log since that's what we can see
+      console.log(`[FRONTEND AUTH LOG] ${message}`, data);
+    } else {
+      console.log(`[FRONTEND AUTH LOG] ${message}`, data);
+    }
+  } catch (error) {
+    console.error("Error sending log to backend:", error);
+  }
+};
+
 interface AuthWrapperProps {
   children: React.ReactNode;
 }
@@ -14,10 +31,11 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
   const location = useLocation();
 
   useEffect(() => {
-    console.log("AuthWrapper mounted, checking authentication...");
+    sendLogToBackend("AuthWrapper mounted, checking authentication...");
     
     // Skip auth check on login page
     if (location.pathname === "/login") {
+      sendLogToBackend("On login page, skipping auth check");
       setIsLoading(false);
       setIsAuthenticated(false);
       return;
@@ -28,11 +46,11 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         const baseUrl = getApiBaseUrl();
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
         
-        console.log("Checking authentication at:", `${apiUrl}/auth/check`);
+        sendLogToBackend("Checking authentication", { url: `${apiUrl}/auth/check`, baseUrl });
         
         // Check if we're running in Tauri
         const isTauri = !!(window as any).__TAURI__;
-        console.log("Running in Tauri:", isTauri);
+        sendLogToBackend("Running in Tauri environment", isTauri);
         
         const response = await fetch(`${apiUrl}/auth/check`, {
           method: 'GET',
@@ -45,25 +63,24 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           }
         });
 
-        console.log("Auth check response status:", response.status);
-        console.log("Auth check response headers:", [...response.headers.entries()]);
+        sendLogToBackend("Auth check response", { status: response.status, headers: [...response.headers.entries()] });
         
         if (response.ok) {
           const data = await response.json();
-          console.log("Auth check response data:", data);
+          sendLogToBackend("Auth check response data", data);
           setIsAuthenticated(data.authenticated);
           setBackendError(false);
           
           // If not authenticated, redirect to login
           if (!data.authenticated) {
-            console.log("Not authenticated, redirecting to login");
+            sendLogToBackend("Not authenticated, redirecting to login");
             navigate("/login");
             return;
           } else {
-            console.log("User is authenticated, showing content");
+            sendLogToBackend("User is authenticated, showing content");
           }
         } else {
-          console.log("Auth check failed with status:", response.status);
+          sendLogToBackend("Auth check failed with status", response.status);
           // Redirect to login but indicate there might be a backend issue
           setIsAuthenticated(false);
           setBackendError(response.status !== 401 && response.status !== 403);
@@ -71,7 +88,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           return;
         }
       } catch (error) {
-        console.error("Auth check failed with error:", error);
+        sendLogToBackend("Auth check failed with error", error);
         // Redirect to login and indicate there's a backend connectivity issue
         setIsAuthenticated(false);
         setBackendError(true);
@@ -87,7 +104,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
 
   // Show loading state while checking authentication
   if (isLoading || isAuthenticated === null) {
-    console.log("Showing loading state");
+    sendLogToBackend("Showing loading state");
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
@@ -98,7 +115,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
     );
   }
 
-  console.log("Rendering children, isAuthenticated:", isAuthenticated);
+  sendLogToBackend("Rendering children", { isAuthenticated });
   // If authenticated, render children; otherwise, redirect handled by useEffect
   return isAuthenticated ? <>{children}</> : null;
 };
