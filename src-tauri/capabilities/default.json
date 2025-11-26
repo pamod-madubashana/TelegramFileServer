@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["Telegram File Server"],
+  "windows": ["main"],
   "permissions": [
     "core:default"
   ]

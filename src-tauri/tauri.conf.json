@@ -37,11 +37,6 @@
     ]
   },
   "plugins": {
-    "http": {
-      "permissions": [
-        "allow-fetch",
-        "allow-cookie"
-      ]
-    }
+    "http": true
   }
 }
