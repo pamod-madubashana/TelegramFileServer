@@ -57,7 +57,7 @@ jobs:
         }
         # Copy the built frontend assets to the expected location for bundling
         Copy-Item -Path "dist\*" -Destination $distPath -Recurse -Force
-        Write-Output "Frontend assets copied to $distPath:"
+        Write-Output "Frontend assets copied to $distPath"
         Get-ChildItem -Path $distPath -Force
       shell: pwsh
       working-directory: src/Frontend
