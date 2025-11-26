@@ -66,6 +66,7 @@ fn main() {
   // Check if we found a frontend dist directory
   if !frontend_dist_path.is_empty() {
     // Check if the frontend index.html exists
+    log::info!("frontend found : {}", frontend_dist_path);
     let index_html_path = format!("{}/index.html", frontend_dist_path);
     if Path::new(&index_html_path).exists() {
       log::info!("Frontend index.html exists: {}", index_html_path);
