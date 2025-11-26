@@ -33,29 +33,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "./frontend-dist/**/*"
-    ],
-    "externalBin": [],
-    "copyright": "",
-    "category": "DeveloperTool",
-    "shortDescription": "",
-    "longDescription": "",
-    "deb": {
-      "depends": []
-    },
-    "macOS": {
-      "frameworks": [],
-      "minimumSystemVersion": "",
-      "exceptionDomain": "",
-      "signingIdentity": null,
-      "providerShortName": null,
-      "entitlements": null
-    },
-    "windows": {
-      "certificateThumbprint": null,
-      "digestAlgorithm": "sha256",
-      "timestampUrl": ""
-    }
+      "../Frontend/dist/**/*"
+    ]
   },
   "plugins": {
     "http": {

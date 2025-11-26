@@ -43,19 +43,6 @@ jobs:
       shell: pwsh
       working-directory: src/Frontend
       
-    - name: Copy frontend assets for bundling
-      run: |
-        # Create frontend-dist directory if it doesn't exist
-        if (!(Test-Path "frontend-dist")) {
-          New-Item -ItemType Directory -Path "frontend-dist"
-        }
-        # Copy frontend dist contents to bundled directory
-        Copy-Item -Path "dist\*" -Destination "frontend-dist" -Recurse -Force
-        Write-Output "Frontend assets copied to frontend-dist:"
-        Get-ChildItem -Path "frontend-dist" -Force
-      shell: pwsh
-      working-directory: src/Frontend
-      
     - name: Verify frontend dist path for Tauri
       run: |
         $expectedPath = "..\src\Frontend\dist"
