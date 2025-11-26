@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 import { FcGoogle } from "react-icons/fc";
 import { BackendUrlUpdater } from "@/components/BackendUrlUpdater";
 
@@ -69,14 +69,14 @@ const Login = () => {
       
       sendLogToBackend("Attempting Google login with baseUrl", { baseUrl, apiUrl: `${apiUrl}/auth/google` });
       
-      const res = await fetch(`${apiUrl}/auth/google`, {
+      const res = await fetchWithTimeout(`${apiUrl}/auth/google`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify({ token: response.credential }),
-      });
+      }, 5000);
 
       sendLogToBackend("Google login response", { status: res.status, headers: [...res.headers.entries()] });
       
@@ -160,14 +160,14 @@ const Login = () => {
       const isTauri = !!(window as any).__TAURI__;
       sendLogToBackend("Running in Tauri environment", isTauri);
       
-      const response = await fetch(`${apiUrl}/auth/login`, {
+      const response = await fetchWithTimeout(`${apiUrl}/auth/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify({ username, password }),
-      });
+      }, 5000);
 
       sendLogToBackend("Login response", { status: response.status, headers: [...response.headers.entries()] });
       

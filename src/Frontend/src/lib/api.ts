@@ -139,18 +139,21 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
   // Use Tauri HTTP plugin if available (in Tauri environment)
   if (isTauriEnv && http) {
     try {
+      console.log('[API] Using Tauri HTTP plugin for request to:', url);
       // Make the request using Tauri's HTTP plugin
       const response = await http.fetch(url, {
         method: options.method || 'GET',
         headers: headers,
-        body: options.body as string,
+        body: typeof options.body === 'string' ? options.body : (options.body ? JSON.stringify(options.body) : undefined),
       });
       
+      console.log('[API] Tauri HTTP response status:', response.status);
       // Return the response directly as it's already a standard Response object
       return response;
     } catch (error) {
-      console.error('Tauri HTTP request failed:', error);
-      // Fall back to standard fetch if Tauri HTTP fails
+      console.error('[API] Tauri HTTP request failed:', error);
+      console.log('[API] Falling back to standard fetch');
+      // Fall through to standard fetch
     }
   }
   
@@ -159,15 +162,18 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   
   try {
+    console.log('[API] Using standard fetch for request to:', url);
     const response = await fetch(url, {
       ...options,
       headers,
       signal: controller.signal
     });
     clearTimeout(timeoutId);
+    console.log('[API] Standard fetch response status:', response.status);
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
+    console.error('[API] Standard fetch error:', error);
     throw error;
   }
 };
