@@ -33,11 +33,11 @@ fn main() {
     "../Frontend/dist"          // Alternative development path
   ];
   
-  let mut frontend_dist_path = "";
+  let mut frontend_dist_path = String::new();
   for path in &possible_paths {
     if Path::new(path).exists() {
       log::info!("Found frontend dist directory: {}", path);
-      frontend_dist_path = path;
+      frontend_dist_path = path.to_string();
       break;
     }
   }
@@ -51,7 +51,10 @@ fn main() {
         let bundled_dist_path = parent.join("src").join("Frontend").join("dist");
         if bundled_dist_path.exists() {
           log::info!("Found bundled frontend dist directory: {:?}", bundled_dist_path);
-          frontend_dist_path = bundled_dist_path.to_str().unwrap_or("");
+          // Convert PathBuf to String to avoid lifetime issues
+          if let Some(path_str) = bundled_dist_path.to_str() {
+            frontend_dist_path = path_str.to_string();
+          }
         } else {
           log::info!("Bundled frontend dist directory not found at: {:?}", bundled_dist_path);
         }
@@ -61,7 +64,6 @@ fn main() {
   
   // Check if we found a frontend dist directory
   if !frontend_dist_path.is_empty() {
-    log::info!("Using frontend dist directory: {}", frontend_dist_path);
     // Check if the frontend index.html exists
     let index_html_path = format!("{}/index.html", frontend_dist_path);
     if Path::new(&index_html_path).exists() {
