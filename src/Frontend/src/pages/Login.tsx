@@ -20,9 +20,11 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [showBackendConfig, setShowBackendConfig] = useState(false);
   const navigate = useNavigate();
+  
+  console.log("Login component initialized");
 
   useEffect(() => {
     console.log("Login page mounted");
@@ -41,7 +43,7 @@ const Login = () => {
 
   const handleCredentialResponse = async (response: any) => {
     console.log("Google credential response received");
-    setIsGoogleLoading(true);
+    setIsLoading(true);
     setError("");
 
     try {
@@ -70,7 +72,7 @@ const Login = () => {
       setError("Unable to connect to the backend server. Please check your backend URL configuration.");
       setShowBackendConfig(true);
     } finally {
-      setIsGoogleLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -108,8 +110,10 @@ const Login = () => {
     }
   }, []);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log("Login form submitted", { username });
+    
     setIsLoading(true);
     setError("");
 
@@ -166,6 +170,14 @@ const Login = () => {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    console.log("Google login initiated");
+    
+    if (window.google && window.google.accounts) {
+      window.google.accounts.id.prompt();
+    }
+  };
+
   const handleBackendConfigSuccess = () => {
     setShowBackendConfig(false);
     setError("");
@@ -208,11 +220,11 @@ const Login = () => {
                 id="googleSignInButton"
                 variant="ghost" 
                 className="w-full py-6 flex items-center justify-center gap-3 hover:bg-transparent hover:shadow-none"
-                disabled={isGoogleLoading}
+                disabled={isLoading}
               >
                 <FcGoogle className="w-6 h-6" />
                 <span className="font-medium">
-                  {isGoogleLoading ? "Signing in..." : "Continue with Google"}
+                  {isLoading ? "Signing in..." : "Continue with Google"}
                 </span>
               </Button>
               
@@ -228,7 +240,7 @@ const Login = () => {
               </div>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="username" className="text-gray-700">Username</Label>
                 <Input
@@ -244,13 +256,22 @@ const Login = () => {
                 <Label htmlFor="password" className="text-gray-700">Password</Label>
                 <Input
                   id="password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
                   className="py-5 px-4 rounded-xl border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="text-sm text-gray-600 hover:text-gray-800"
+                  >
+                    {showPassword ? "Hide" : "Show"} Password
+                  </button>
+                </div>
               </div>
               <Button 
                 type="submit" 

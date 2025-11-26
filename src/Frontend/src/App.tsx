@@ -19,6 +19,7 @@ const RouteDebugger = () => {
 };
 
 const AppRoutes = () => {
+  console.log("Rendering AppRoutes component");
   return (
     <>
       <RouteDebugger />
@@ -35,6 +36,8 @@ const AppRoutes = () => {
 };
 
 const App = () => {
+  console.log("Initializing App component");
+  
   useEffect(() => {
     // Check system preference
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -42,8 +45,10 @@ const App = () => {
     const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
       if (e.matches) {
         document.documentElement.classList.add('dark');
+        console.log("Dark mode enabled");
       } else {
         document.documentElement.classList.remove('dark');
+        console.log("Light mode enabled");
       }
     };
 
@@ -53,34 +58,20 @@ const App = () => {
     // Listen for changes
     mediaQuery.addEventListener('change', handleChange);
 
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, []);
-
-  useEffect(() => {
-    // Add keyboard shortcut to reset API URL
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+Alt+R to reset API URL
-      if (e.ctrlKey && e.altKey && e.key === 'r') {
-        e.preventDefault();
-        resetApiBaseUrl();
-        alert('API URL has been reset to default. The page will now reload.');
-        window.location.reload();
-      }
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
     };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  console.log("App component rendered");
 
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Toaster />
-        <Sonner />
         <BrowserRouter>
-          <AppRoutes />
+          <div className="flex flex-col min-h-screen bg-background text-foreground">
+            <AppRoutes />
+            <Toaster />
+            <Sonner />
+          </div>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
