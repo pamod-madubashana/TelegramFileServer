@@ -99,15 +99,50 @@ if (typeof window !== 'undefined' && (window as any).__TAURI__) {
   });
 }
 
+// Utility function to get auth headers for requests
+const getAuthHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  
+  // Check if we're in Tauri and have an auth token
+  const isTauri = !!(window as any).__TAURI__;
+  if (isTauri) {
+    try {
+      const tauri_auth = localStorage.getItem('tauri_auth_token');
+      if (tauri_auth) {
+        const authData = JSON.parse(tauri_auth);
+        if (authData.auth_token) {
+          headers['X-Auth-Token'] = authData.auth_token;
+          console.log('[API] Adding auth token to request:', { token: authData.auth_token.substring(0, 10) + '...' });
+        } else {
+          console.log('[API] tauri_auth_token exists but no auth_token field');
+        }
+      } else {
+        console.log('[API] No tauri_auth_token in localStorage');
+      }
+    } catch (e) {
+      console.error('[API] Failed to get auth token from localStorage:', e);
+    }
+  }
+  
+  return headers;
+};
+
 // Utility function to implement fetch with timeout
 export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout: number = 3000): Promise<Response> => {
+  // Add auth headers to all requests
+  const authHeaders = getAuthHeaders();
+  const headers = {
+    ...authHeaders,
+    ...(options.headers as Record<string, string>)
+  };
+  
   // Use Tauri HTTP plugin if available (in Tauri environment)
   if (isTauriEnv && http) {
     try {
       // Make the request using Tauri's HTTP plugin
       const response = await http.fetch(url, {
         method: options.method || 'GET',
-        headers: options.headers as Record<string, string>,
+        headers: headers,
         body: options.body as string,
       });
       
@@ -126,6 +161,7 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
   try {
     const response = await fetch(url, {
       ...options,
+      headers,
       signal: controller.signal
     });
     clearTimeout(timeoutId);
