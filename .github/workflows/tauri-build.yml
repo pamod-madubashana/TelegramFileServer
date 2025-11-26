@@ -46,11 +46,11 @@ jobs:
     - name: Copy frontend assets for bundling
       run: |
         # Create the directory structure if it doesn't exist
-        New-Item -ItemType Directory -Force -Path "../src/Frontend"
-        # Copy the built frontend assets to the expected location
-        Copy-Item -Path "dist" -Destination "../src/Frontend" -Recurse -Force
-        Write-Output "Frontend assets copied to ../src/Frontend/dist:"
-        Get-ChildItem -Path "../src/Frontend/dist" -Force
+        New-Item -ItemType Directory -Force -Path "dist"
+        # Copy the built frontend assets to the expected location for bundling
+        Copy-Item -Path "dist\*" -Destination "..\src-tauri\dist" -Recurse -Force
+        Write-Output "Frontend assets copied to ..\src-tauri\dist:"
+        Get-ChildItem -Path "..\src-tauri\dist" -Force
       shell: pwsh
       working-directory: src/Frontend
       

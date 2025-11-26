@@ -27,9 +27,9 @@ fn main() {
   
   // Check for frontend dist directory - try multiple possible locations
   let possible_paths = vec![
+    "./dist",                    // Bundled path
     "../src/Frontend/dist",      // Development path
-    "./src/Frontend/dist",       // Installed path (bundled)
-    "./dist",                    // Alternative bundled path
+    "./src/Frontend/dist",       // Alternative bundled path
     "../Frontend/dist"          // Alternative development path
   ];
   
@@ -49,7 +49,7 @@ fn main() {
     // Try to find the executable directory and look for assets there
     if let Ok(exe_path) = std::env::current_exe() {
       if let Some(parent) = exe_path.parent() {
-        let bundled_dist_path = parent.join("src").join("Frontend").join("dist");
+        let bundled_dist_path = parent.join("dist");
         if bundled_dist_path.exists() {
           log::info!("Found bundled frontend dist directory: {:?}", bundled_dist_path);
           // Convert PathBuf to String to avoid lifetime issues
