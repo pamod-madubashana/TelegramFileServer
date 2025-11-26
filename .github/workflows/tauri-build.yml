@@ -45,16 +45,20 @@ jobs:
       
     - name: Copy frontend assets for bundling
       run: |
-        # Navigate to src-tauri directory
-        Set-Location "..\src-tauri"
-        # Create the dist directory if it doesn't exist
-        New-Item -ItemType Directory -Force -Path "dist"
-        # Navigate back to src/Frontend
-        Set-Location "..\Frontend"
+        # Ensure we're in the correct directory
+        Write-Output "Current location: $(Get-Location)"
+        # Create the dist directory in src-tauri if it doesn't exist
+        $distPath = "..\src-tauri\dist"
+        if (!(Test-Path $distPath)) {
+          New-Item -ItemType Directory -Force -Path $distPath
+          Write-Output "Created directory: $distPath"
+        } else {
+          Write-Output "Directory already exists: $distPath"
+        }
         # Copy the built frontend assets to the expected location for bundling
-        Copy-Item -Path "dist\*" -Destination "..\src-tauri\dist" -Recurse -Force
-        Write-Output "Frontend assets copied to ..\src-tauri\dist:"
-        Get-ChildItem -Path "..\src-tauri\dist" -Force
+        Copy-Item -Path "dist\*" -Destination $distPath -Recurse -Force
+        Write-Output "Frontend assets copied to $distPath:"
+        Get-ChildItem -Path $distPath -Force
       shell: pwsh
       working-directory: src/Frontend
       
