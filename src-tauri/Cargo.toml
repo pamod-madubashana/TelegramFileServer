@@ -17,6 +17,7 @@ serde = { version = "1.0.0", features = ["derive"] }
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-shell = "2.0.0"
 tauri-plugin-dialog = "2.0.0"
+tauri-plugin-http = "2.0.0"
 
 [features]
 default = [ "custom-protocol" ]

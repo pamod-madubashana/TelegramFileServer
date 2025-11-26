@@ -35,7 +35,10 @@
       "permissions": [
         "allow-fetch",
         "allow-cookie"
-      ]
+      ],
+      "defaultHeaders": {
+        "withCredentials": true
+      }
     }
   }
 }
