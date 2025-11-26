@@ -43,7 +43,6 @@ fn main() {
   }
   
   if frontend_dist_path.is_empty() {
-    log::error!("Frontend dist directory not found in any expected location");
     log::info!("Checked paths: {:?}", possible_paths);
     
     // Try to find the executable directory and look for assets there
@@ -58,7 +57,11 @@ fn main() {
         }
       }
     }
-  } else {
+  }
+  
+  // Check if we found a frontend dist directory
+  if !frontend_dist_path.is_empty() {
+    log::info!("Using frontend dist directory: {}", frontend_dist_path);
     // Check if the frontend index.html exists
     let index_html_path = format!("{}/index.html", frontend_dist_path);
     if Path::new(&index_html_path).exists() {
