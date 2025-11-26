@@ -63,7 +63,7 @@ export const BackendUrlUpdater = ({ onErrorUpdate, onSuccess }: BackendUrlUpdate
         setTestResult({ success: false, message: `Server responded with status ${response.status}` });
       }
     } catch (error) {
-      clearTimeout(timeoutId); // Make sure to clear the timeout
+      // clearTimeout(timeoutId); // Make sure to clear the timeout
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           setTestResult({ success: false, message: "Connection timed out" });
