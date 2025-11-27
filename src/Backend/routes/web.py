@@ -49,9 +49,10 @@ app.include_router(stream_router)
 app.add_middleware(
     SessionMiddleware, 
     secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0",
-    same_site="lax",
-    https_only=False,
-    max_age=3600  # 1 hour session timeout
+    same_site="none",  # Changed for Tauri WebView compatibility
+    https_only=False,   # Allow non-HTTPS for localhost
+    max_age=3600,       # 1 hour session timeout
+    path="/"           # Explicitly set cookie path
 )
 app.add_middleware(
     CORSMiddleware,

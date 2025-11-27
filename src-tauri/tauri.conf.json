@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm --prefix ../src/Frontend run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": "npm --prefix ../src/Frontend run build",
     "frontendDist": "../src/Frontend/dist"
   },
   "app": {
@@ -31,12 +31,13 @@
     "targets": "all",
     "icon": [
       "icons/icon.ico"
-    ],
-    "resources": [
-      "../src/Frontend/dist"
     ]
   },
   "plugins": {
-    "http": null
+    "http": {
+      "scope": [
+        "fetch"
+      ]
+    }
   }
 }

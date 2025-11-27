@@ -196,9 +196,31 @@ export const api = {
         const baseUrl = getApiBaseUrl();
         // For the default case, we need to append /api to the base URL
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-        const response = await fetchWithTimeout(`${apiUrl}/files?path=${encodeURIComponent(path)}`, {
+        
+        // Prepare fetch options
+        const fetchOptions: RequestInit = {
             credentials: 'include', // Include cookies for session-based auth
-        }, 3000); // 3 second timeout
+        };
+        
+        // Add auth token for Tauri environment
+        if ((window as any).__TAURI__) {
+            const tauri_auth = localStorage.getItem('tauri_auth_token');
+            if (tauri_auth) {
+                try {
+                    const authData = JSON.parse(tauri_auth);
+                    if (authData.auth_token) {
+                        fetchOptions.headers = {
+                            ...fetchOptions.headers,
+                            'X-Auth-Token': authData.auth_token
+                        };
+                    }
+                } catch (e) {
+                    console.error('Failed to parse Tauri auth token:', e);
+                }
+            }
+        }
+        
+        const response = await fetchWithTimeout(`${apiUrl}/files?path=${encodeURIComponent(path)}`, fetchOptions, 3000); // 3 second timeout
 
         if (!response.ok) {
             throw new Error(`Failed to fetch files: ${response.statusText}`);
@@ -211,9 +233,31 @@ export const api = {
         const baseUrl = getApiBaseUrl();
         // For the default case, we need to append /api to the base URL
         const apiUrl = baseUrl ? `${baseUrl}/api` : '/api';
-        const response = await fetchWithTimeout(`${apiUrl}/auth/check`, {
+        
+        // Prepare fetch options
+        const fetchOptions: RequestInit = {
             credentials: 'include',
-        }, 3000); // 3 second timeout
+        };
+        
+        // Add auth token for Tauri environment
+        if ((window as any).__TAURI__) {
+            const tauri_auth = localStorage.getItem('tauri_auth_token');
+            if (tauri_auth) {
+                try {
+                    const authData = JSON.parse(tauri_auth);
+                    if (authData.auth_token) {
+                        fetchOptions.headers = {
+                            ...fetchOptions.headers,
+                            'X-Auth-Token': authData.auth_token
+                        };
+                    }
+                } catch (e) {
+                    console.error('Failed to parse Tauri auth token:', e);
+                }
+            }
+        }
+        
+        const response = await fetchWithTimeout(`${apiUrl}/auth/check`, fetchOptions, 3000); // 3 second timeout
 
         if (!response.ok) {
             throw new Error(`Failed to check auth: ${response.statusText}`);

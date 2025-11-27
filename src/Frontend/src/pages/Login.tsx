@@ -160,14 +160,17 @@ const Login = () => {
       const isTauri = !!(window as any).__TAURI__;
       sendLogToBackend("Running in Tauri environment", isTauri);
       
-      const response = await fetchWithTimeout(`${apiUrl}/auth/login`, {
+      // Prepare fetch options
+      const fetchOptions: RequestInit = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         credentials: "include",
         body: JSON.stringify({ username, password }),
-      }, 5000);
+      };
+      
+      const response = await fetchWithTimeout(`${apiUrl}/auth/login`, fetchOptions, 5000);
 
       sendLogToBackend("Login response", { status: response.status, headers: [...response.headers.entries()] });
       

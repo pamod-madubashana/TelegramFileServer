@@ -42,10 +42,11 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
     }
     
     const checkAuth = async () => {
+      // Check if we're running in Tauri
+      const isTauri = !!(window as any).__TAURI__;
+      sendLogToBackend("Running in Tauri environment", isTauri);
+      
       try {
-        // Check if we're running in Tauri
-        const isTauri = !!(window as any).__TAURI__;
-        sendLogToBackend("Running in Tauri environment", isTauri);
         
         // In Tauri, first check localStorage for auth token
         if (isTauri) {
@@ -78,15 +79,18 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         };
         
         // If Tauri and we have a token, add it to headers
-        if (isTauri && tauri_auth) {
-          try {
-            const authData = JSON.parse(tauri_auth);
-            if (authData.auth_token) {
-              headers['X-Auth-Token'] = authData.auth_token;
-              sendLogToBackend("Adding auth token to request headers");
+        if (isTauri) {
+          const tauri_auth = localStorage.getItem('tauri_auth_token');
+          if (tauri_auth) {
+            try {
+              const authData = JSON.parse(tauri_auth);
+              if (authData.auth_token) {
+                headers['X-Auth-Token'] = authData.auth_token;
+                sendLogToBackend("Adding auth token to request headers");
+              }
+            } catch (e) {
+              sendLogToBackend("Failed to extract auth token from localStorage", e);
             }
-          } catch (e) {
-            sendLogToBackend("Failed to extract auth token from localStorage", e);
           }
         }
         
@@ -121,6 +125,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
               localStorage.setItem('tauri_auth_token', JSON.stringify({ 
                 authenticated: true, 
                 username: data.username,
+                auth_token: data.auth_token || null, // Include auth token if available
                 timestamp: new Date().toISOString()
               }));
             }
@@ -138,6 +143,8 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           return;
         }
       } catch (error) {
+        // Check if we're running in Tauri
+        const isTauri = !!(window as any).__TAURI__;
         sendLogToBackend("Auth check failed with error", error);
         // Redirect to login and indicate there's a backend connectivity issue
         setIsAuthenticated(false);

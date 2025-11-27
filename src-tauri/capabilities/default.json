@@ -4,6 +4,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "http:allow-fetch"
+    "http:allow-fetch",
+    "http:default"
   ]
 }
