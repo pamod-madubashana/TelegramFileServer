@@ -12,44 +12,35 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        path: .
 
     - name: Install Rust stable
       uses: dtolnay/rust-toolchain@stable
-      
+
     - name: Install Node.js 20
       uses: actions/setup-node@v4
       with:
         node-version: 20
         cache: 'npm'
-        cache-dependency-path: src/Frontend/package-lock.json
-        
+        cache-dependency-path: TelegramFileServer/src/Frontend/package-lock.json
+
     - name: Install frontend dependencies
       run: npm ci
-      working-directory: src/Frontend
+      working-directory: TelegramFileServer/src/Frontend
 
     - name: Build frontend
       run: npm run build
-      working-directory: src/Frontend
-      
-    - name: Install Tauri CLI
-      run: npm install -g @tauri-apps/cli
+      working-directory: TelegramFileServer/src/Frontend
 
     - name: Install Tauri CLI
-      run: cargo install tauri-cli
-
-    - name: Install Tauri CLI v2
       run: cargo install tauri-cli --version "^2.0.0"
-    
+
     - name: Build Tauri
-      working-directory: ./src-tauri
+      working-directory: TelegramFileServer/src-tauri
       run: cargo tauri build
 
-      
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-app-bundle
-        path: src-tauri/target/release/bundle/**
+        path: TelegramFileServer/src-tauri/target/release/bundle/**
         if-no-files-found: error
