@@ -29,15 +29,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [
-      "icons/icon.ico"
-    ]
+    "icon": ["icons/icon.ico"]
   },
   "plugins": {
     "http": {
-      "scope": [
-        "fetch"
-      ]
+      "scope": ["fetch"]
     }
   }
 }
