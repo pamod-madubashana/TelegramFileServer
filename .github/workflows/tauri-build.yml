@@ -82,5 +82,5 @@ jobs:
         run: cargo install tauri-cli
 
       - name: Build Tauri App
-        run: tauri build
+        run: cargo tauri build
         working-directory: src-tauri
