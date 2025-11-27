@@ -5,9 +5,10 @@
   "identifier": "com.telegram.fileserver",
   "build": {
     "beforeDevCommand": "npm --prefix ../src/Frontend run dev",
-    "devUrl": "http://localhost:8080",
+    "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "",
-    "frontendDist": "../src/Frontend/dist"
+    "frontendDist": "../src/Frontend/dist",
+    "withGlobalTauri": false
   },
   "app": {
     "windows": [
@@ -38,9 +39,10 @@
   },
   "plugins": {
     "http": {
-      "scope": [
+      "allow": [
         "http://localhost:8000/**/*",
-        "http://127.0.0.1:8000/**/*"
+        "http://127.0.0.1:8000/**/*",
+        "https://**/*"
       ]
     }
   }
