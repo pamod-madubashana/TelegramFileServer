@@ -32,8 +32,6 @@
     "icon": ["icons/icon.ico"]
   },
   "plugins": {
-    "http": {
-      "scope": ["fetch"]
-    }
+    "http": null
   }
 }
