@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, fetchWithTimeout } from "@/lib/api";
 
 // Function to send logs to backend
 const sendLogToBackend = async (message: string, data?: any) => {
