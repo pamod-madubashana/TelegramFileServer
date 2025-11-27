@@ -21,26 +21,26 @@ jobs:
       with:
         node-version: 20
         cache: 'npm'
-        cache-dependency-path: TelegramFileServer/src/Frontend/package-lock.json
+        cache-dependency-path: /src/Frontend/package-lock.json
 
     - name: Install frontend dependencies
       run: npm ci
-      working-directory: TelegramFileServer/TelegramFileServer/src/Frontend
+      working-directory: src/Frontend
 
     - name: Build frontend
       run: npm run build
-      working-directory: TelegramFileServer/TelegramFileServer/src/Frontend
+      working-directory: src/Frontend
 
     - name: Install Tauri CLI
       run: cargo install tauri-cli --version "^2.0.0"
 
     - name: Build Tauri
-      working-directory: TelegramFileServer/TelegramFileServer/src-tauri
+      working-directory: src-tauri
       run: cargo tauri build
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-app-bundle
-        path: TelegramFileServer/TelegramFileServer/src-tauri/target/release/bundle/**
+        path: src-tauri/target/release/bundle/**
         if-no-files-found: error
