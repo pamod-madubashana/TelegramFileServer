@@ -37,6 +37,6 @@
     ]
   },
   "plugins": {
-    "http": {}
+    "http": null
   }
 }
