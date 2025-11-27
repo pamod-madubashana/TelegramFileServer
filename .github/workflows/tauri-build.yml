@@ -69,14 +69,14 @@ jobs:
 
       - name: Install Frontend Dependencies
         run: npm install
-        working-directory: src/Frontend
+        working-directory: src-tauri/Frontend
 
       - name: Build Frontend
         run: npm run build
-        working-directory: src/Frontend
+        working-directory: src-tauri/Frontend
 
       - name: Debug dist folder
-        run: dir src/Frontend/dist
+        run: dir src-tauri/Frontend/dist
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli

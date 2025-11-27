@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.telegram.fileserver",
   "build": {
-    "beforeDevCommand": "npm --prefix ../TelegramFileServer/src/Frontend run dev",
-    "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm --prefix ../TelegramFileServer/src/Frontend run build",
-    "frontendDist": "../src/Frontend/dist"
+    "beforeDevCommand": "npm --prefix Frontend run dev",
+    "beforeBuildCommand": "npm --prefix Frontend run build",
+    "frontendDist": "Frontend/dist",
+    "devUrl": "http://localhost:8080"
   },
   "app": {
     "windows": [
