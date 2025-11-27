@@ -25,22 +25,22 @@ jobs:
 
     - name: Install frontend dependencies
       run: npm ci
-      working-directory: TelegramFileServer/src/Frontend
+      working-directory: TelegramFileServer/TelegramFileServer/src/Frontend
 
     - name: Build frontend
       run: npm run build
-      working-directory: TelegramFileServer/src/Frontend
+      working-directory: TelegramFileServer/TelegramFileServer/src/Frontend
 
     - name: Install Tauri CLI
       run: cargo install tauri-cli --version "^2.0.0"
 
     - name: Build Tauri
-      working-directory: TelegramFileServer/src-tauri
+      working-directory: TelegramFileServer/TelegramFileServer/src-tauri
       run: cargo tauri build
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-app-bundle
-        path: TelegramFileServer/src-tauri/target/release/bundle/**
+        path: TelegramFileServer/TelegramFileServer/src-tauri/target/release/bundle/**
         if-no-files-found: error
