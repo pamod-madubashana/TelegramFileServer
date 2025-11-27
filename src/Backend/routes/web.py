@@ -46,14 +46,18 @@ app = FastAPI(
 app.include_router(stream_router)
 
 # --- Middleware Setup ---
+# Configure session middleware to work with both browsers and Tauri WebView
+# same_site="none" is required for Tauri WebView but also works in modern browsers
+# when combined with Secure=False for localhost development
 app.add_middleware(
     SessionMiddleware, 
     secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0",
-    same_site="none",  # Changed for Tauri WebView compatibility
-    https_only=False,   # Allow non-HTTPS for localhost
+    same_site="none",  # Works for both browsers and Tauri WebView
+    https_only=False,   # Allow non-HTTPS for localhost development
     max_age=3600,       # 1 hour session timeout
     path="/"           # Explicitly set cookie path
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

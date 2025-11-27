@@ -72,20 +72,24 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
         
         sendLogToBackend("Checking authentication", { url: `${apiUrl}/auth/check`, baseUrl });
         
-        // Prepare headers for auth check
-        const headers: any = {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
+        // Prepare fetch options
+        const fetchOptions: RequestInit = {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-cache',
         };
         
-        // If Tauri and we have a token, add it to headers
+        // Add auth token for Tauri environment
         if (isTauri) {
           const tauri_auth = localStorage.getItem('tauri_auth_token');
           if (tauri_auth) {
             try {
               const authData = JSON.parse(tauri_auth);
               if (authData.auth_token) {
-                headers['X-Auth-Token'] = authData.auth_token;
+                fetchOptions.headers = {
+                  ...fetchOptions.headers,
+                  'X-Auth-Token': authData.auth_token
+                };
                 sendLogToBackend("Adding auth token to request headers");
               }
             } catch (e) {
@@ -94,12 +98,7 @@ export const AuthWrapper = ({ children }: AuthWrapperProps) => {
           }
         }
         
-        const response = await fetch(`${apiUrl}/auth/check`, {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-cache',
-          headers
-        });
+        const response = await fetchWithTimeout(`${apiUrl}/auth/check`, fetchOptions, 3000);
 
         sendLogToBackend("Auth check response", { status: response.status, headers: [...response.headers.entries()] });
         
