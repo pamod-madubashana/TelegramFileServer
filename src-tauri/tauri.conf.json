@@ -7,8 +7,7 @@
     "beforeDevCommand": "npm --prefix ../src/Frontend run dev",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "",
-    "frontendDist": "../src/Frontend/dist",
-    "withGlobalTauri": false
+    "frontendDist": "../src/Frontend/dist"
   },
   "app": {
     "windows": [
