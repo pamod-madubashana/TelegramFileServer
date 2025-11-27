@@ -87,15 +87,18 @@ export const getFullApiUrl = (endpoint: string): string => {
 // Import Tauri HTTP plugin
 let http: typeof import('@tauri-apps/plugin-http') | null = null;
 let isTauriEnv = false;
+let httpReady: Promise<void> | null = null;
 
 // Check if we're running in Tauri
 if (typeof window !== 'undefined' && (window as any).__TAURI__) {
   isTauriEnv = true;
   // Dynamically import the HTTP plugin only in Tauri environment
-  import('@tauri-apps/plugin-http').then((module) => {
+  httpReady = import('@tauri-apps/plugin-http').then((module) => {
     http = module;
+    console.log('[API] Tauri HTTP plugin loaded successfully');
   }).catch((error) => {
-    console.error('Failed to load Tauri HTTP plugin:', error);
+    console.error('[API] Failed to load Tauri HTTP plugin:', error);
+    httpReady = null;
   });
 }
 
@@ -137,27 +140,37 @@ export const fetchWithTimeout = async (url: string, options: RequestInit = {}, t
   };
   
   // Use Tauri HTTP plugin if available (in Tauri environment)
-  if (isTauriEnv && http) {
+  if (isTauriEnv) {
     try {
-      console.log('[API] Using Tauri HTTP plugin for request to:', url);
-      // Make the request using Tauri's HTTP plugin
-      const response = await http.fetch(url, {
-        method: options.method || 'GET',
-        headers: headers,
-        body: typeof options.body === 'string' ? options.body : (options.body ? JSON.stringify(options.body) : undefined),
-      });
+      // Wait for Tauri HTTP plugin to load if it's still loading
+      if (httpReady) {
+        await httpReady;
+      }
       
-      console.log('[API] Tauri HTTP response status:', response.status);
-      // Return the response directly as it's already a standard Response object
-      return response;
+      if (http) {
+        console.log('[API] Using Tauri HTTP plugin for request to:', url);
+        // Make the request using Tauri's HTTP plugin
+        const response = await http.fetch(url, {
+          method: options.method || 'GET',
+          headers: headers,
+          body: typeof options.body === 'string' ? options.body : (options.body ? JSON.stringify(options.body) : undefined),
+        });
+        
+        console.log('[API] Tauri HTTP response status:', response.status);
+        // Return the response directly as it's already a standard Response object
+        return response;
+      } else {
+        console.warn('[API] Tauri HTTP plugin not available after waiting');
+      }
     } catch (error) {
       console.error('[API] Tauri HTTP request failed:', error);
-      console.log('[API] Falling back to standard fetch');
-      // Fall through to standard fetch
     }
+    // In Tauri, if HTTP plugin fails, we should throw error instead of falling back to fetch
+    // because standard fetch in Tauri webview will be intercepted by asset handler
+    throw new Error('Failed to make HTTP request in Tauri environment');
   }
   
-  // Standard browser fetch with timeout
+  // Standard browser fetch with timeout (for non-Tauri environments)
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   
