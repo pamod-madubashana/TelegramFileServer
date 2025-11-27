@@ -6,8 +6,8 @@
   "build": {
     "beforeDevCommand": "npm --prefix ../src/Frontend run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm --prefix ../src/Frontend run build",
-  "frontendDist": "../src/Frontend/dist"
+    "beforeBuildCommand": "npm --prefix ../TelegramFileServer/src/Frontend run build",
+    "frontendDist": "../src/Frontend/dist"
   },
   "app": {
     "windows": [
