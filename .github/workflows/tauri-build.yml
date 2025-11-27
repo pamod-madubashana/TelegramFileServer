@@ -1,46 +1,86 @@
-name: Tauri Build
+# name: Tauri Build
+
+# on:
+#   push:
+#     branches: [ main ]
+#   workflow_dispatch:
+
+# jobs:
+#   build-windows:
+#     runs-on: windows-latest
+    
+#     steps:
+#     - name: Checkout repository
+#       uses: actions/checkout@v4
+
+#     - name: Install Rust stable
+#       uses: dtolnay/rust-toolchain@stable
+
+#     - name: Install Node.js 20
+#       uses: actions/setup-node@v4
+#       with:
+#         node-version: 20
+#         cache: 'npm'
+#         cache-dependency-path: src/Frontend/package-lock.json
+
+#     - name: Install frontend dependencies
+#       run: npm ci
+#       working-directory: src/Frontend
+
+#     - name: Build frontend
+#       run: npm run build
+#       working-directory: src/Frontend
+
+#     - name: Install Tauri CLI
+#       run: cargo install tauri-cli --version "^2.0.0"
+
+#     - name: Build Tauri
+#       working-directory: src-tauri
+#       run: cargo tauri build
+
+#     - name: Upload artifacts
+#       uses: actions/upload-artifact@v4
+#       with:
+#         name: windows-app-bundle
+#         path: src-tauri/target/release/bundle/**
+#         if-no-files-found: error
+
+name: Build Tauri App
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Install Rust stable
-      uses: dtolnay/rust-toolchain@stable
+      - name: Install Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
 
-    - name: Install Node.js 20
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        cache: 'npm'
-        cache-dependency-path: src/Frontend/package-lock.json
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-    - name: Install frontend dependencies
-      run: npm ci
-      working-directory: src/Frontend
+      - name: Install Frontend Dependencies
+        run: npm install
+        working-directory: src/Frontend
 
-    - name: Build frontend
-      run: npm run build
-      working-directory: src/Frontend
+      - name: Build Frontend
+        run: npm run build
+        working-directory: src/Frontend
 
-    - name: Install Tauri CLI
-      run: cargo install tauri-cli --version "^2.0.0"
+      - name: Debug dist folder
+        run: dir src/Frontend/dist
 
-    - name: Build Tauri
-      working-directory: src-tauri
-      run: cargo tauri build
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: windows-app-bundle
-        path: src-tauri/target/release/bundle/**
-        if-no-files-found: error
+      - name: Build Tauri App
+        run: tauri build
+        working-directory: src-tauri
