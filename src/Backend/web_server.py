@@ -42,7 +42,7 @@ class WebServerManager:
             # Assuming src/Backend/web_server.py -> src/Frontend
             current_dir = os.path.dirname(os.path.abspath(__file__))
             root_dir = os.path.dirname(os.path.dirname(current_dir))  # src/Backend -> src -> root
-            frontend_dir = os.path.join(root_dir, "src-tauri", "Frontend")
+            frontend_dir = os.path.join(root_dir, "src", "Frontend")
             
             if not os.path.exists(frontend_dir):
                 logger.error(f"Frontend directory not found at {frontend_dir}")
