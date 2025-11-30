@@ -2,6 +2,7 @@
 
 from typing import Literal, Optional
 from pyrogram import Client
+import asyncio
 import uvicorn
 import logging
 import subprocess
