@@ -45,24 +45,29 @@ The application consists of three main components:
 
 ### Quick Setup
 
-1. Clone the repository:
+1. Clone the repository with submodules:
    ```bash
-   git clone <repository-url>
+   git clone --recurse-submodules <repository-url>
    cd fileServer
    ```
 
-2. Install Python dependencies:
+2. If you've already cloned the repository without submodules, initialize them:
+   ```bash
+   git submodule update --init --recursive
+   ```
+
+3. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Install frontend dependencies:
+4. Install frontend dependencies:
    ```bash
-   cd src/Frontend
+   cd src/frontend
    npm install
    ```
 
-4. Set up environment variables:
+5. Set up environment variables:
    Copy `.env.example` to `.env` and configure your settings:
    ```
    API_ID=your_telegram_api_id
@@ -71,7 +76,7 @@ The application consists of three main components:
    DATABASE_URL=your_mongodb_connection_string
    ```
 
-5. Run the application:
+6. Run the application:
    ```bash
    python __main__.py
    ```
@@ -166,16 +171,16 @@ The backend is written in Python using FastAPI. Key directories:
 
 The frontend uses React with Vite:
 ```bash
-cd src/Frontend
+cd src/frontend
 npm run dev  # Start development server
 npm run build  # Build for production
 ```
 
 Key directories:
-- `src/Frontend/src/components/` - React components
-- `src/Frontend/src/hooks/` - Custom React hooks
-- `src/Frontend/src/pages/` - Page components
-- `src/Frontend/src/lib/` - Utility functions
+- `src/frontend/src/components/` - React components
+- `src/frontend/src/hooks/` - Custom React hooks
+- `src/frontend/src/pages/` - Page components
+- `src/frontend/src/lib/` - Utility functions
 
 ## Security
 
