@@ -900,9 +900,15 @@ async def serve_frontend(request: Request, full_path: str):
     # Check if we're in development by looking for the vite config
     vite_config = os.path.join(current_dir, "..", "..", "Frontend", "vite.config.ts")
     if os.path.exists(vite_config):
-        # In development, let the Vite proxy handle frontend requests
-        # This will be handled by the proxy in vite.config.ts
-        pass
+        # In development, we still need to serve the index.html for client-side routing
+        # The Vite proxy will handle API requests, but we need to serve the frontend for all routes
+        # Try to serve the index.html from the frontend/src directory for development
+        dev_index = os.path.join(current_dir, "..", "..", "Frontend", "index.html")
+        if os.path.exists(dev_index):
+            with open(dev_index, "r", encoding="utf-8") as f:
+                content = f.read()
+                return Response(content=content, media_type="text/html")
+        # If that doesn't work, fall through to the dist directory check
     
     # Try to serve the built frontend files
     if os.path.exists(frontend_dir):
@@ -913,7 +919,7 @@ async def serve_frontend(request: Request, full_path: str):
                 content = f.read()
                 return Response(content=content, media_type="text/html")
     
-    # Fallback to a simple response
+    # Fallback to a simple response that serves the frontend for client-side routing
     return Response(
         content="""
         <!DOCTYPE html>
