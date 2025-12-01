@@ -22,14 +22,15 @@ class TelegramVerificationResponse(BaseModel):
 
 @router.post("/generate-verification", response_model=TelegramVerificationResponse)
 async def generate_telegram_verification(
-    request: TelegramVerificationRequest,
+    verification_request: TelegramVerificationRequest,
+    request: Request,
     _: bool = Depends(require_auth)
 ):
     """
     Generate a Telegram verification code and return the least busy bot link
     """
     try:
-        user_id = request.user_id
+        user_id = verification_request.user_id
         
         # Generate a unique verification code
         verification_code = database.Tgcodes.generate_verification_code(user_id)
@@ -88,15 +89,16 @@ async def generate_telegram_verification(
 
 @router.post("/verify-code")
 async def verify_telegram_code(
-    request: TelegramVerificationRequest,
+    verification_request: TelegramVerificationRequest,
     code: str,
+    request: Request,
     _: bool = Depends(require_auth)
 ):
     """
     Verify a Telegram code for a user
     """
     try:
-        user_id = request.user_id
+        user_id = verification_request.user_id
         is_valid = database.Tgcodes.verify_code(user_id, code)
         
         if is_valid:

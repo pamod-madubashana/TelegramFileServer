@@ -26,7 +26,7 @@ from ..security.credentials import require_auth, is_authenticated, require_admin
 from .api_routes import list_media_api, delete_media_api, update_media_api, delete_movie_quality_api, delete_tv_quality_api, delete_tv_episode_api, delete_tv_season_api
 from .stream_routes import router as stream_router
 # Import the new Telegram verification router
-from .Tgcodes import router as telegram_router
+from .telegram_verification import router as telegram_router
 
 from src.Config import APP_NAME
 from src.Database import database
