@@ -15,9 +15,6 @@ from d4rk import D4RK_BotManager
 from src.Database import database
 from src.Config import API_ID , API_HASH , TOKENS , APP_NAME , TIME_ZONE ,LOGS , DATABASE_URL , OWNER , LOGGER_BOT , WEB_APP , PORT
 
-# Initialize the database connection
-if hasattr(database, 'connect'):
-    database.connect(APP_NAME, DATABASE_URL)
 
 from .user import user
 

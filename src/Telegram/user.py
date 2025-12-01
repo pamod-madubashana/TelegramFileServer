@@ -13,9 +13,6 @@ logger = setup_logger(__name__)
 from src.Config import API_ID, API_HASH, LOGS, DATABASE_URL, APP_NAME
 from src.Database import database
 
-# Initialize the database connection
-if hasattr(database, 'connect'):
-    database.connect(APP_NAME, DATABASE_URL)
 
 
 class User(Client):
