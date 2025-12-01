@@ -32,7 +32,7 @@ async def generate_telegram_verification(
         user_id = request.user_id
         
         # Generate a unique verification code
-        verification_code = database.TelegramVerification.generate_verification_code(user_id)
+        verification_code = database.Tgcodes.generate_verification_code(user_id)
         
         # Get the least busy bot
         bot_manager = request.app.state.bot_manager
@@ -97,7 +97,7 @@ async def verify_telegram_code(
     """
     try:
         user_id = request.user_id
-        is_valid = database.TelegramVerification.verify_code(user_id, code)
+        is_valid = database.Tgcodes.verify_code(user_id, code)
         
         if is_valid:
             logger.info(f"Telegram verification successful for user {user_id}")

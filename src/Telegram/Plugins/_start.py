@@ -69,7 +69,7 @@ async def handle_verification_code(client: Client, message: Message, code: str) 
     """
     try:
         # Look up the code in the verification collection
-        verification_record = database.TelegramVerification.find_one({"code": code})
+        verification_record = database.Tgcodes.find_one({"code": code})
         
         if not verification_record:
             # Not a verification code, continue with normal processing
@@ -82,7 +82,7 @@ async def handle_verification_code(client: Client, message: Message, code: str) 
             return True
             
         # Verify the code (this will also delete it since it's one-time use)
-        is_valid = database.TelegramVerification.verify_code(user_id, code)
+        is_valid = database.Tgcodes.verify_code(user_id, code)
         if not is_valid:
             await message.reply("Invalid or expired verification code.")
             return True

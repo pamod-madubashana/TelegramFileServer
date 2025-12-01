@@ -11,7 +11,7 @@ from pymongo.results import InsertOneResult
 
 logger = setup_logger(__name__)
 
-class TelegramVerification(Collection):
+class Tgcodes(Collection):
     def __init__(self, collection: Collection) -> None:
         super().__init__(
             collection.database,
