@@ -25,10 +25,13 @@ logger = setup_logger("web_server")
 from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token, ADMIN_PASSWORD_HASH
 from .api_routes import list_media_api, delete_media_api, update_media_api, delete_movie_quality_api, delete_tv_quality_api, delete_tv_episode_api, delete_tv_season_api
 from .stream_routes import router as stream_router
+# Import the new Telegram verification router
+from .telegram_verification import router as telegram_router
 
 from src.Config import APP_NAME
 from src.Database import database
 from dataclasses import asdict
+
 
 # Global variable for workloads (if used by other modules, otherwise just for get_workloads)
 work_loads = {}
@@ -44,6 +47,8 @@ app = FastAPI(
 
 # Include stream routes
 app.include_router(stream_router)
+# Include Telegram verification routes
+app.include_router(telegram_router)
 
 # --- Middleware Setup ---
 # Configure session middleware to work with both browsers and Tauri WebView
@@ -835,6 +840,50 @@ async def get_file_thumbnail(file_id: str, _: bool = Depends(require_auth)):
                     )
     except Exception as e:
         logger.error(f"Error downloading file thumbnail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UserProfileResponse(BaseModel):
+    username: str
+    email: Optional[str] = None
+    telegram_user_id: Optional[int] = None
+    telegram_username: Optional[str] = None
+    telegram_first_name: Optional[str] = None
+    telegram_last_name: Optional[str] = None
+    telegram_profile_picture: Optional[str] = None
+
+@app.get("/api/user/profile", response_model=UserProfileResponse)
+async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
+    """
+    Get detailed user profile information including Telegram verification status
+    """
+    try:
+        # Get the authenticated user
+        username = request.session.get("username")
+        if not username:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Get user data from database
+        user_data = database.Users.getUser(username)
+        if not user_data:
+            # Create user if not exists
+            database.Users.SaveUser(username)
+            user_data = database.Users.getUser(username)
+        
+        # Build response
+        profile = UserProfileResponse(
+            username=username,
+            email=request.session.get("user_email"),
+            telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
+            telegram_username=user_data.get("telegram_username") if user_data else None,
+            telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
+            telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
+            telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+        )
+        
+        return profile
+        
+    except Exception as e:
+        logger.error(f"Error fetching user profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add a catch-all route to serve the frontend for client-side routing

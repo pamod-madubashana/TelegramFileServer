@@ -10,15 +10,17 @@ from d4rk.Database import db as _db
 from src.Database.Mongodb._users import Users
 from src.Database.Mongodb._settings import Settings
 from src.Database.Mongodb._files import Files
+from src.Database.Mongodb._telegram_verification import TelegramVerification
 
 class TypedDatabase:
     Users: Users
     Settings: Settings
     Files: Files
+    TelegramVerification: TelegramVerification
     is_connected: bool
 
     def connect(self, name: str, DATABASE_URL: str = None) -> None:
-        r = _db.connect(name=name, collections=[Users,Settings,Files], DATABASE_URL=DATABASE_URL)
+        r = _db.connect(name=name, collections=[Users,Settings,Files,TelegramVerification], DATABASE_URL=DATABASE_URL)
         return r
 
     def __getattr__(self, item) -> Any:

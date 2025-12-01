@@ -21,6 +21,10 @@ async def start_command(client: Client, message: Message) -> None:
         data = message.command
         if len(data) > 1:
             data = data[1]
+            # Check if this is a verification code
+            if await handle_verification_code(client, message, data):
+                return
+            # Existing file handling code
             file = database.Movies.get_movie_file_by_id(data)
             if file:
                 for f in file.file_data:
@@ -59,6 +63,55 @@ async def start_command(client: Client, message: Message) -> None:
         logger.error(f"Error in start command: {e}")
         await message.reply_text("An error occurred while processing your request.")
 
+async def handle_verification_code(client: Client, message: Message, code: str) -> bool:
+    """
+    Handle Telegram verification codes sent via /start command
+    """
+    try:
+        # Look up the code in the verification collection
+        verification_record = database.TelegramVerification.find_one({"code": code})
+        
+        if not verification_record:
+            # Not a verification code, continue with normal processing
+            return False
+            
+        # Get the user ID associated with this code
+        user_id = verification_record.get("user_id")
+        if not user_id:
+            await message.reply("Invalid verification code.")
+            return True
+            
+        # Verify the code (this will also delete it since it's one-time use)
+        is_valid = database.TelegramVerification.verify_code(user_id, code)
+        if not is_valid:
+            await message.reply("Invalid or expired verification code.")
+            return True
+            
+        # Code is valid, update the user's Telegram information
+        telegram_data = {
+            "telegram_user_id": message.from_user.id,
+            "telegram_username": message.from_user.username,
+            "telegram_first_name": message.from_user.first_name,
+            "telegram_last_name": message.from_user.last_name,
+            "telegram_profile_picture": None  # Will be updated separately if needed
+        }
+        
+        # Update user's Telegram information in the database
+        success = database.Users.update_telegram_info(user_id, telegram_data)
+        
+        if success:
+            await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server.")
+            logger.info(f"Telegram verification successful for user {user_id} (Telegram ID: {message.from_user.id})")
+        else:
+            await message.reply("❌ Verification completed but failed to update user information.")
+            logger.error(f"Failed to update Telegram info for user {user_id}")
+            
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error handling verification code: {e}")
+        await message.reply("An error occurred during verification.")
+        return True
 
 async def start_callback_handler(client: Client, callback_query: CallbackQuery) -> None:
     bt = ButtonMaker()
@@ -72,7 +125,6 @@ async def start_callback_handler(client: Client, callback_query: CallbackQuery) 
     except Exception as e:
         logger.error(f"Error in start callback handler: {e}")
         await callback_query.answer("An error occurred!")
-
 
 @button(pattern="rf:s:")
 async def help_callback(client: Client, callback_query: CallbackQuery) -> None:

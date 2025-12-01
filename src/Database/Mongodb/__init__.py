@@ -3,4 +3,5 @@
 from ._users import Users
 from ._settings import Settings
 from ._files import Files
+from ._telegram_verification import TelegramVerification
 from .db import database

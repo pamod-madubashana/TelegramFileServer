@@ -1,6 +1,7 @@
-# src/Database/Mongodb/_settings.py
+# src/Database/Mongodb/_users.py
 
-from typing import Any
+from typing import Any, Optional
+from datetime import datetime
 
 from d4rk.Logs import setup_logger
 
@@ -55,3 +56,39 @@ class Users(Collection):
             else:
                 self.insert_one({'user_id':user_id,setting:default})
         except:return None
+        
+    def update_telegram_info(self, user_id: str, telegram_data: dict) -> bool:
+        """
+        Update user's Telegram information
+        """
+        try:
+            update_data = {
+                "telegram_user_id": telegram_data.get("telegram_user_id"),
+                "telegram_username": telegram_data.get("telegram_username"),
+                "telegram_first_name": telegram_data.get("telegram_first_name"),
+                "telegram_last_name": telegram_data.get("telegram_last_name"),
+                "telegram_profile_picture": telegram_data.get("telegram_profile_picture"),
+                "updated_at": datetime.utcnow()
+            }
+            
+            result = self.update_one(
+                {'user_id': user_id},
+                {"$set": update_data},
+                upsert=True
+            )
+            
+            logger.info(f"Updated Telegram info for user {user_id}")
+            return result.modified_count > 0 or result.upserted_id is not None
+        except Exception as e:
+            logger.error(f"Error updating Telegram info for user {user_id}: {e}")
+            return False
+            
+    def get_user_by_telegram_id(self, telegram_user_id: int) -> Optional[dict]:
+        """
+        Get user by Telegram user ID
+        """
+        try:
+            return self.find_one({"telegram_user_id": telegram_user_id})
+        except Exception as e:
+            logger.error(f"Error retrieving user by Telegram ID {telegram_user_id}: {e}")
+            return None

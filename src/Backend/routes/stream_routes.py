@@ -22,11 +22,11 @@ from pyrogram.errors import AuthBytesInvalid
 from pyrogram.session import Session , Auth
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from src.Database import database
+from src.Config import APP_NAME
+
 
 from d4rk.Logs import setup_logger
 
-
-from src.Config import APP_NAME
 
 current_dir = Path(__file__).parent
 parent_dir = current_dir.parent
