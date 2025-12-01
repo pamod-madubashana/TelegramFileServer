@@ -125,7 +125,11 @@ class Files(Collection):
             # Get files of the appropriate type
             file_type = folder_to_type.get(folder_name)
             if file_type:
-                files_query = {"file_type": file_type}
+                # Get both files of the specified type AND folders at this path
+                files_query = {"$or": [
+                    {"file_type": file_type},
+                    {"file_type": "folder", "file_path": path}
+                ]}
                 all_items = list(self.find(files_query))
             else:
                 # If it's not a recognized virtual folder, treat as regular folder
