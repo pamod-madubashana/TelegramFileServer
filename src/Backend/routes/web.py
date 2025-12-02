@@ -806,7 +806,20 @@ async def get_bots_workloads():
 
 # --- Thumbnail Endpoint ---
 @app.get("/api/file/{file_id}/thumbnail")
-async def get_file_thumbnail(file_id: str, _: bool = Depends(require_auth)):
+async def get_file_thumbnail(file_id: str, request: Request, auth_token: str = None):
+    # Check authentication - first try the normal auth, then check for token in query params
+    try:
+        # This will raise an exception if not authenticated via normal means
+        require_auth(request)
+    except HTTPException:
+        # If normal auth fails, check for auth_token in query params
+        if auth_token and auth_token in _auth_tokens:
+            # Token is valid, proceed
+            pass
+        else:
+            # No valid authentication method
+            raise HTTPException(status_code=401, detail="Authentication required")
+    
     try:
         bot_manager = app.state.bot_manager
         if not bot_manager:
@@ -817,7 +830,6 @@ async def get_file_thumbnail(file_id: str, _: bool = Depends(require_auth)):
         if not client:
             raise HTTPException(status_code=500, detail="No available bot clients")
         
-
         photo_data = await client.download_media(file_id, in_memory=True)
         if photo_data:
             # Check if it's a BytesIO object
