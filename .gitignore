@@ -12,3 +12,5 @@ test/
 .python-version
 .vscode/
 yt-downloader-tauri-main/
+.qoder/rules
+
