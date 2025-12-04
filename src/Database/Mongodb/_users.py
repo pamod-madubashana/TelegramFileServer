@@ -117,16 +117,49 @@ class Users(Collection):
             logger.error(f"Error retrieving user by Telegram ID {telegram_user_id}: {e}")
             return None
             
-    def delete_user(self, user_id: str) -> bool:
+    def get_user_by_identifier(self, user_identifier: str) -> Optional[dict]:
         """
-        Delete a user by user_id
+        Get a user by either MongoDB _id or user_id
         """
         try:
-            result = self.delete_one({"user_id": user_id})
-            logger.info(f"Deleted user {user_id}")
+            # First try to find by user_id (the username/email identifier)
+            user_data = self.find_one({"user_id": user_identifier})
+            
+            # If that didn't work, try to find by MongoDB _id
+            if not user_data:
+                try:
+                    from bson import ObjectId
+                    user_data = self.find_one({"_id": ObjectId(user_identifier)})
+                except Exception:
+                    # If ObjectId conversion fails, return None
+                    pass
+            
+            return user_data
+        except Exception as e:
+            logger.error(f"Error retrieving user with identifier {user_identifier}: {e}")
+            return None
+            
+    def delete_user(self, user_identifier: str) -> bool:
+        """
+        Delete a user by either MongoDB _id or user_id
+        """
+        try:
+            # First try to delete by user_id (the username/email identifier)
+            result = self.delete_one({"user_id": user_identifier})
+            
+            # If that didn't work, try to delete by MongoDB _id
+            if result.deleted_count == 0:
+                try:
+                    from bson import ObjectId
+                    result = self.delete_one({"_id": ObjectId(user_identifier)})
+                except Exception:
+                    # If ObjectId conversion fails, we stick with the previous result
+                    pass
+            
+            logger.info(f"Deleted user with identifier {user_identifier}")
             return result.deleted_count > 0
         except Exception as e:
-            logger.error(f"Error deleting user {user_id}: {e}")
+            logger.error(f"Error deleting user with identifier {user_identifier}: {e}")
             return False
             
     def get_all_users(self) -> List[dict]:
@@ -192,4 +225,27 @@ class Users(Collection):
             return is_valid
         except Exception as e:
             logger.error(f"Error verifying credentials for user {username}: {e}")
+            return False
+
+    def update_user_by_identifier(self, user_identifier: str, update_data: dict) -> bool:
+        """
+        Update a user by either MongoDB _id or user_id
+        """
+        try:
+            # First try to update by user_id (the username/email identifier)
+            result = self.update_one({"user_id": user_identifier}, {"$set": update_data})
+            
+            # If that didn't work, try to update by MongoDB _id
+            if result.matched_count == 0:
+                try:
+                    from bson import ObjectId
+                    result = self.update_one({"_id": ObjectId(user_identifier)}, {"$set": update_data})
+                except Exception:
+                    # If ObjectId conversion fails, we stick with the previous result
+                    pass
+            
+            logger.info(f"Updated user with identifier {user_identifier}")
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Error updating user with identifier {user_identifier}: {e}")
             return False
