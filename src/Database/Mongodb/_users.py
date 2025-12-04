@@ -120,8 +120,13 @@ class Users(Collection):
     def get_user_by_identifier(self, user_identifier: str) -> Optional[dict]:
         """
         Get a user by either MongoDB _id or user_id
+        Handle special case for admin user with ID "1"
         """
         try:
+            # Handle special case for admin user with hardcoded ID "1"
+            if user_identifier == "1":
+                return self.getUser("admin")
+            
             # First try to find by user_id (the username/email identifier)
             user_data = self.find_one({"user_id": user_identifier})
             
@@ -142,8 +147,15 @@ class Users(Collection):
     def delete_user(self, user_identifier: str) -> bool:
         """
         Delete a user by either MongoDB _id or user_id
+        Handle special case for admin user with ID "1"
         """
         try:
+            # Handle special case for admin user with hardcoded ID "1"
+            if user_identifier == "1":
+                # Prevent deletion of admin user
+                logger.info("Attempt to delete admin user by ID '1' denied")
+                return False
+            
             # First try to delete by user_id (the username/email identifier)
             result = self.delete_one({"user_id": user_identifier})
             
@@ -202,6 +214,7 @@ class Users(Collection):
     def verify_user_credentials(self, username: str, password: str) -> bool:
         """
         Verify user credentials against database
+        If no password hash exists, allow login with default password and save hash
         """
         try:
             # Get user from database
@@ -212,9 +225,25 @@ class Users(Collection):
             
             # Get stored password hash
             stored_hash = user_data.get('password_hash')
+            
+            # If no password hash exists, check if password matches default
             if not stored_hash:
                 logger.info(f"No password hash found for user {username}")
-                return False
+                # Check if password matches default password
+                DEFAULT_PASSWORD = "password"
+                if password == DEFAULT_PASSWORD:
+                    logger.info(f"Using default password for user {username}")
+                    # Save the password hash for future logins
+                    password_hash = hashlib.sha256(password.encode()).hexdigest()
+                    self.update_one(
+                        {"user_id": username},
+                        {"$set": {"password_hash": password_hash}}
+                    )
+                    logger.info(f"Saved password hash for user {username}")
+                    return True
+                else:
+                    logger.info(f"Password does not match default for user {username}")
+                    return False
             
             # Hash the provided password
             provided_hash = hashlib.sha256(password.encode()).hexdigest()
@@ -226,12 +255,50 @@ class Users(Collection):
         except Exception as e:
             logger.error(f"Error verifying credentials for user {username}: {e}")
             return False
+            
+    def verify_current_password(self, username: str, password: str) -> bool:
+        """
+        Verify current password without automatically saving hash
+        Used for password change operations
+        """
+        try:
+            # Get user from database
+            user_data = self.getUser(username)
+            if not user_data:
+                logger.info(f"User {username} not found in database")
+                return False
+            
+            # Get stored password hash
+            stored_hash = user_data.get('password_hash')
+            
+            # If no password hash exists, check if password matches default
+            if not stored_hash:
+                logger.info(f"No password hash found for user {username}")
+                # Check if password matches default password
+                DEFAULT_PASSWORD = "password"
+                return password == DEFAULT_PASSWORD
+            
+            # Hash the provided password
+            provided_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            # Compare hashes
+            is_valid = stored_hash == provided_hash
+            logger.info(f"Current password verification for user {username}: {is_valid}")
+            return is_valid
+        except Exception as e:
+            logger.error(f"Error verifying current password for user {username}: {e}")
+            return False
 
     def update_user_by_identifier(self, user_identifier: str, update_data: dict) -> bool:
         """
         Update a user by either MongoDB _id or user_id
+        Handle special case for admin user with ID "1"
         """
         try:
+            # Handle special case for admin user with hardcoded ID "1"
+            if user_identifier == "1":
+                user_identifier = "admin"
+            
             # First try to update by user_id (the username/email identifier)
             result = self.update_one({"user_id": user_identifier}, {"$set": update_data})
             

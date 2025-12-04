@@ -917,6 +917,10 @@ class UpdateUserRequest(BaseModel):
     email: Optional[str] = None
     permissions: UserPermission
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
 @app.get("/api/user/profile", response_model=UserProfileResponse)
 async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
     """
@@ -1215,6 +1219,78 @@ async def delete_user(request: Request, user_id_param: str, user_id: str = Depen
         raise
     except Exception as e:
         logger.error(f"Error deleting user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/users/{user_id_param}/password")
+async def change_user_password(request: Request, user_id_param: str, password_request: ChangePasswordRequest, user_id: str = Depends(require_auth)):
+    """
+    Change a user's password (owner only or user themselves)
+    """
+    try:
+        logger.info(f"Attempting to change password for user_id_param: {user_id_param}")
+        
+        # Get current user data
+        current_user_data = database.Users.getUser(request.session.get("username"))
+        logger.info(f"Current user data: {current_user_data}")
+        
+        # Check if user is owner or trying to change their own password
+        is_owner = (current_user_data and current_user_data.get("telegram_user_id") and 
+                   int(current_user_data.get("telegram_user_id")) == OWNER)
+        logger.info(f"Is owner: {is_owner}")
+        
+        # Handle special case for admin user with ID "1"
+        actual_user_id_param = user_id_param
+        if user_id_param == "1":
+            actual_user_id_param = "admin"
+        
+        # Get target user data
+        target_user = database.Users.get_user_by_identifier(actual_user_id_param)
+        logger.info(f"Target user data: {target_user}")
+        
+        if not target_user:
+            logger.warning(f"User not found for user_id_param: {actual_user_id_param}")
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Allow if user is owner or if user is changing their own password
+        target_username = target_user.get("user_id")
+        is_self = target_username == request.session.get("username")
+        logger.info(f"Target username: {target_username}, Is self: {is_self}")
+        
+        if not is_owner and not is_self:
+            logger.warning(f"Access denied - not owner ({is_owner}) and not self ({is_self})")
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Verify current password using the new method that doesn't auto-save hash
+        logger.info(f"Verifying current password for user: {target_username}")
+        is_password_correct = database.Users.verify_current_password(target_username, password_request.current_password)
+        logger.info(f"Current password verification result: {is_password_correct}")
+        
+        if not is_password_correct:
+            logger.warning(f"Incorrect current password for user: {target_username}")
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        
+        # Hash new password
+        logger.info(f"Hashing new password for user: {target_username}")
+        new_password_hash = hashlib.sha256(password_request.new_password.encode()).hexdigest()
+        
+        # Update password in database
+        logger.info(f"Updating password in database for user: {target_username}")
+        success = database.Users.update_user_by_identifier(actual_user_id_param, {"password_hash": new_password_hash})
+        logger.info(f"Database update result: {success}")
+        
+        if not success:
+            logger.error(f"Failed to update password for user: {target_username}")
+            raise HTTPException(status_code=500, detail="Failed to update password")
+        
+        logger.info(f"Password updated successfully for user {target_username}")
+        return {"message": "Password updated successfully"}
+        
+    except HTTPException:
+        logger.info("Re-raising HTTPException")
+        raise
+    except Exception as e:
+        logger.error(f"Error changing user password: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add a catch-all route to serve the frontend for client-side routing
