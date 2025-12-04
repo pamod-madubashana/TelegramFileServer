@@ -28,7 +28,7 @@ from .stream_routes import router as stream_router
 # Import the new Telegram verification router
 from .telegram_verification import router as telegram_router
 
-from src.Config import APP_NAME
+from src.Config import APP_NAME, OWNER
 from src.Database import database
 from dataclasses import asdict
 
@@ -879,6 +879,11 @@ class UserProfileResponse(BaseModel):
     telegram_last_name: Optional[str] = None
     telegram_profile_picture: Optional[str] = None
 
+
+class IsOwnerResponse(BaseModel):
+    is_owner: bool
+    owner_telegram_id: Optional[int] = None
+
 @app.get("/api/user/profile", response_model=UserProfileResponse)
 async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
     """
@@ -912,6 +917,29 @@ async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
         
     except Exception as e:
         logger.error(f"Error fetching user profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/user/is-owner", response_model=IsOwnerResponse)
+async def is_user_owner(request: Request, user_id: str = Depends(require_auth)):
+    """
+    Check if the current user is the owner (defined in OWNER env variable)
+    """
+    try:
+        # Get user data from database
+        user_data = database.Users.getUser(request.session.get("username"))
+        
+        # Check if user has telegram_user_id and if it matches OWNER
+        is_owner = False
+        owner_telegram_id = None
+        
+        if OWNER is not None and user_data and user_data.get("telegram_user_id"):
+            is_owner = int(user_data.get("telegram_user_id")) == OWNER
+            owner_telegram_id = OWNER
+        
+        return IsOwnerResponse(is_owner=is_owner, owner_telegram_id=owner_telegram_id)
+    except Exception as e:
+        logger.error(f"Error checking owner status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add a catch-all route to serve the frontend for client-side routing
