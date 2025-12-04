@@ -2,6 +2,7 @@
 
 from typing import Any, Optional, List
 from datetime import datetime
+import hashlib
 
 from d4rk.Logs import setup_logger
 
@@ -164,3 +165,31 @@ class Users(Collection):
         except Exception as e:
             logger.error(f"Error retrieving permissions for user {user_id}: {e}")
             return None
+            
+    def verify_user_credentials(self, username: str, password: str) -> bool:
+        """
+        Verify user credentials against database
+        """
+        try:
+            # Get user from database
+            user_data = self.getUser(username)
+            if not user_data:
+                logger.info(f"User {username} not found in database")
+                return False
+            
+            # Get stored password hash
+            stored_hash = user_data.get('password_hash')
+            if not stored_hash:
+                logger.info(f"No password hash found for user {username}")
+                return False
+            
+            # Hash the provided password
+            provided_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            # Compare hashes
+            is_valid = stored_hash == provided_hash
+            logger.info(f"Password verification for user {username}: {is_valid}")
+            return is_valid
+        except Exception as e:
+            logger.error(f"Error verifying credentials for user {username}: {e}")
+            return False

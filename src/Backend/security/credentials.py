@@ -28,6 +28,20 @@ def verify_password(password: str) -> bool:
 
 def verify_credentials(username: str, password: str) -> bool:
     logger.info(f"Verifying credentials for username: '{username}'")
+    
+    # First, try to verify against the database
+    try:
+        # Check if user exists in database
+        user_data = database.Users.getUser(username)
+        if user_data:
+            logger.info(f"User {username} found in database, verifying credentials")
+            # Verify credentials using database method
+            return database.Users.verify_user_credentials(username, password)
+    except Exception as e:
+        logger.error(f"Error checking database for user {username}: {e}")
+    
+    # If not found in database, fall back to default admin credentials
+    logger.info(f"User {username} not found in database, checking against default admin credentials")
     logger.info(f"Expected username: '{USERNAME}'")
     is_username_valid = username == USERNAME
     is_password_valid = verify_password(password)
