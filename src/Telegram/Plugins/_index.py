@@ -1,11 +1,11 @@
 # src/Telegram/Plugins/_index.py
 
 import asyncio
+from typing import List, Optional, Union
+from cachetools import TTLCache
 
 from pyrogram import Client, filters 
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton , WebAppInfo
-
-from typing import List, Optional, Union
 
 from d4rk.Logs import setup_logger
 from d4rk.Utils import CustomFilters , ButtonMaker ,  round_robin ,command , button , progress_bar
@@ -15,32 +15,30 @@ from src.Database import database
 
 logger = setup_logger(__name__)
 
-
-current_indexer: Optional['IndexMessages'] = None    
+active_indexers = TTLCache(maxsize=1000, ttl=24*3600)
 
 class IndexMessages:
-    pending: str = "░"
-    fill: str = "▓"
-    total: int = 0
-    got: int = 0
-    index: int = 0
-    database: int = 0
-    failed_count: int = 0
-    skipped_count: int = 0
-    non_file_count: int = 0
-    total_file_messages: int = 0
-    processed_file_messages: int = 0
-    processed_message_ids: set = None
-    messages_list: List[Message] = []
-    file_queue = asyncio.Queue()
-    semaphore = asyncio.Semaphore(5)
-    worker_running = False
-
-    def __init__(self,message,client) -> None:
+    
+    def __init__(self,message,client,owner_id: str) -> None:
         self.message: Message = message
         self.client: Client = client
+        self.owner_id: str = owner_id
+        
+        self.total: int = 0
+        self.got: int = 0
+        self.index: int = 0
+        self.database: int = 0
+        self.failed_count: int = 0
+        self.skipped_count: int = 0
+        self.non_file_count: int = 0
+        self.total_file_messages: int = 0
+        self.processed_file_messages: int = 0
+        self.processed_message_ids: set = set()
+        self.messages_list: List[Message] = []
+        self.file_queue = asyncio.Queue()
+        self.semaphore = asyncio.Semaphore(5)
+        self.worker_running = False
         self.index_on_progress = True
-        self.processed_message_ids = set()
 
     async def save_file(self,message: Message):
         try:
@@ -105,6 +103,9 @@ class IndexMessages:
             file_size = media.file_size
             file_size = int(media.file_size/1024/1024)
             file_caption = message.caption or "N/A"
+            # Use the owner ID from the indexer (the user who initiated the indexing)
+            owner_id = self.owner_id
+            
             return database.Files.add_file(
                 chat_id=message.chat.id,
                 message_id=message.id,
@@ -114,7 +115,8 @@ class IndexMessages:
                 file_size=file_size,
                 file_name=file_name,
                 file_caption=file_caption,
-                file_path=file_path
+                file_path=file_path,
+                owner_id=owner_id
             )
         except Exception as e:
             logger.error(f"Error in save_file: {e}")
@@ -305,13 +307,17 @@ class IndexMessages:
         logger.warning("Indexing process cancelled by user")
         self.worker_running = False
         
+        # Remove this indexer from the cache
+        if self.owner_id in active_indexers:
+            del active_indexers[self.owner_id]
+        
         if hasattr(self, 'update_task'):
             self.update_task.cancel()
 
     async def start(self) -> None:
-        global current_indexer
-        current_indexer = self
-        logger.info(f"Starting indexing process for chat {self.message.chat.id} up to message {self.message.id}")
+        # Register this indexer in the cache
+        active_indexers[self.owner_id] = self
+        logger.info(f"Starting indexing process for chat {self.message.chat.id} up to message {self.message.id} for user {self.owner_id}")
         self.worker_running = True
         
         self.update_task = asyncio.create_task(self.update_message())
@@ -335,7 +341,6 @@ class IndexMessages:
             self.worker_running = False
             raise
         finally:
-            current_indexer = None
             if hasattr(self, 'update_task'):
                 self.update_task.cancel()
                 try:
@@ -364,8 +369,16 @@ class IndexMessages:
                 await asyncio.sleep(15)
                 await self.message.edit(final_text)
             logger.info(f"Indexing completed: {self.total_file_messages} files queued, {self.processed_file_messages} processed, {self.database} saved, {self.failed_count} failed, {self.skipped_count} skipped")
+            
+            # Remove this indexer from the cache when completed
+            if self.owner_id in active_indexers:
+                del active_indexers[self.owner_id]
         except Exception as e:
             logger.error(f"Failed to send completion message: {e}")
+            
+            # Remove this indexer from the cache on error
+            if self.owner_id in active_indexers:
+                del active_indexers[self.owner_id]
         
 
 @Client.on_message(filters.regex(r"^/index") & filters.channel)
@@ -384,7 +397,7 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
         bt.ibutton("❌ Cancel", 'cancel_indexing')
         keyboard = bt.build_menu()
         await callback.message.edit("🚀 Starting indexing process...", reply_markup=keyboard)
-        indexer = IndexMessages(callback.message, client)
+        indexer = IndexMessages(callback.message, client, str(callback.from_user.id))
         # await indexer.start()
         asyncio.create_task(indexer.start())
     except Exception as e:
@@ -399,9 +412,9 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
 
 @button(pattern="cancel_indexing",CustomFilters=CustomFilters.authorize(sudo=True))
 async def cancel_indexing_callback(client: Client, callback: CallbackQuery) -> None:
-    global current_indexer
     try:
-        indexer = current_indexer
+        # Get the indexer for the user who initiated the cancel request
+        indexer = active_indexers.get(str(callback.from_user.id))
         if indexer:
             indexer.cancel_indexing()
             

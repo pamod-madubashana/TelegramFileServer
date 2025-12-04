@@ -224,11 +224,12 @@ async def health_check_options():
 @app.get("/api/files")
 async def get_all_files_route(
     path: str = Query(default="/", description="Folder path to fetch files from"),
-    _: bool = Depends(require_auth)
+    user_id: str = Depends(require_auth)
 ):
     try:
-        # Fetch files for the specified path
-        files_data = database.Files.get_files_by_path(path)
+        # Fetch files for the specified path and user
+        logger.info(f"Fetching files for path {path} and user_id {user_id}")
+        files_data = database.Files.get_files_by_path(path, user_id)
         files_list = []
         for f in files_data:
             f_dict = asdict(f)
@@ -246,9 +247,9 @@ class CreateFolderRequest(BaseModel):
     currentPath: str
 
 @app.post("/api/folders/create")
-async def create_folder_route(request: CreateFolderRequest, _: bool = Depends(require_auth)):
+async def create_folder_route(request: CreateFolderRequest, user_id: str = Depends(require_auth)):
     try:
-        success = database.Files.create_folder(request.folderName, request.currentPath)
+        success = database.Files.create_folder(request.folderName, request.currentPath, user_id)
         if success:
             return {"message": f"Folder '{request.folderName}' created successfully"}
         else:
@@ -266,8 +267,12 @@ class CopyFileRequest(BaseModel):
     target_path: str
 
 @app.post("/api/files/move")
-async def move_file_route(request: MoveFileRequest, _: bool = Depends(require_auth)):
+async def move_file_route(request: MoveFileRequest, user_id: str = Depends(require_auth)):
     try:
+        # Check if user owns the file
+        if not database.Files.check_file_owner(request.file_id, user_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+            
         # Get the file by ID
         file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
         if not file_data:
@@ -275,7 +280,7 @@ async def move_file_route(request: MoveFileRequest, _: bool = Depends(require_au
         
         # Update the file's path
         database.Files.update_one(
-            {"_id": ObjectId(request.file_id)},
+            {"_id": ObjectId(request.file_id), "owner_id": user_id},
             {"$set": {"file_path": request.target_path}}
         )
         
@@ -285,8 +290,12 @@ async def move_file_route(request: MoveFileRequest, _: bool = Depends(require_au
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/files/copy")
-async def copy_file_route(request: CopyFileRequest, _: bool = Depends(require_auth)):
+async def copy_file_route(request: CopyFileRequest, user_id: str = Depends(require_auth)):
     try:
+        # Check if user owns the file
+        if not database.Files.check_file_owner(request.file_id, user_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+            
         # Get the file by ID
         file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
         if not file_data:
@@ -296,6 +305,8 @@ async def copy_file_route(request: CopyFileRequest, _: bool = Depends(require_au
         new_file_data = file_data.copy()
         new_file_data["_id"] = ObjectId()  # Generate new ID
         new_file_data["file_path"] = request.target_path
+        # Preserve the owner when copying
+        new_file_data["owner_id"] = user_id
         
         # For copied files, we need to handle the unique ID properly
         # For now, we'll keep the same file_unique_id since it refers to the Telegram file
@@ -316,10 +327,10 @@ class RenameFileRequest(BaseModel):
     new_name: str
 
 @app.post("/api/files/rename")
-async def rename_file_route(request: RenameFileRequest, _: bool = Depends(require_auth)):
+async def rename_file_route(request: RenameFileRequest, user_id: str = Depends(require_auth)):
     try:
-        # Rename the file/folder
-        success = database.Files.rename_file(request.file_id, request.new_name)
+        # Rename the file/folder with owner validation
+        success = database.Files.rename_file(request.file_id, request.new_name, user_id)
         
         if success:
             return {"message": "Item renamed successfully"}
@@ -330,10 +341,14 @@ async def rename_file_route(request: RenameFileRequest, _: bool = Depends(requir
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/files/delete")
-async def delete_file_route(request: DeleteFileRequest, _: bool = Depends(require_auth)):
+async def delete_file_route(request: DeleteFileRequest, user_id: str = Depends(require_auth)):
     try:
+        # Check if user owns the file
+        if not database.Files.check_file_owner(request.file_id, user_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+            
         # Get the file by ID to check if it exists
-        file_data = database.Files.find_one({"_id": ObjectId(request.file_id)})
+        file_data = database.Files.find_one({"_id": ObjectId(request.file_id), "owner_id": user_id})
         if not file_data:
             raise HTTPException(status_code=404, detail="File not found")
         
@@ -349,17 +364,18 @@ async def delete_file_route(request: DeleteFileRequest, _: bool = Depends(requir
             else:
                 full_folder_path = f"{folder_path}/{folder_name}"
             
-            # Delete all files in the folder
-            database.Files.delete_many({"file_path": full_folder_path})
+            # Delete all files in the folder (owned by the user)
+            database.Files.delete_many({"file_path": full_folder_path, "owner_id": user_id})
             
             # Also delete any subfolders and files inside this folder
             # Delete items that are inside this folder (path starts with full_folder_path + "/")
             database.Files.delete_many({
-                "file_path": {"$regex": f"^{re.escape(full_folder_path)}/"}
+                "file_path": {"$regex": f"^{re.escape(full_folder_path)}/"},
+                "owner_id": user_id
             })
         
         # Delete the file/folder itself
-        result = database.Files.delete_one({"_id": ObjectId(request.file_id)})
+        result = database.Files.delete_one({"_id": ObjectId(request.file_id), "owner_id": user_id})
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="File not found")

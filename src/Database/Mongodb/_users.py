@@ -31,13 +31,18 @@ class Users(Collection):
         try:return self.find_one({"user_id": user_id})
         except:return None
             
-    def SaveUser(self, user_id: str) -> InsertOneResult | None:
+    def SaveUser(self, user_id: str, password_hash: Optional[str] = None, email: Optional[str] = None) -> InsertOneResult | None:
         try:
             if user_id in self.user_cache:return
             self.user_cache.add(user_id)
             saved = self.getUser(user_id)
             if not saved:
-                return self.insert_one({'user_id': user_id})
+                user_data = {'user_id': user_id}
+                if password_hash:
+                    user_data['password_hash'] = password_hash
+                if email:
+                    user_data['email'] = email
+                return self.insert_one(user_data)
             
         except:return None
         
@@ -48,6 +53,14 @@ class Users(Collection):
             else:
                 self.insert_one({'user_id':user_id,setting:value})
         except:return None
+        
+    def save_password_hash(self, user_id: str, password_hash: str) -> None:
+        """Save user's password hash"""
+        self.saveUserSetting(user_id, 'password_hash', password_hash)
+        
+    def save_email(self, user_id: str, email: str) -> None:
+        """Save user's email"""
+        self.saveUserSetting(user_id, 'email', email)
 
     def getUserSetting(self,user_id :str, setting :str,default :str = None) -> Any | None:
         try:
@@ -56,6 +69,16 @@ class Users(Collection):
             else:
                 self.insert_one({'user_id':user_id,setting:default})
         except:return None
+        
+    def get_password_hash(self, user_id: str) -> Optional[str]:
+        """Get user's password hash"""
+        user_data = self.getUser(user_id)
+        return user_data.get('password_hash') if user_data else None
+        
+    def get_email(self, user_id: str) -> Optional[str]:
+        """Get user's email"""
+        user_data = self.getUser(user_id)
+        return user_data.get('email') if user_data else None
         
     def update_telegram_info(self, user_id: str, telegram_data: dict) -> bool:
         """

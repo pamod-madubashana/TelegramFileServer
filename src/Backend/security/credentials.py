@@ -6,6 +6,7 @@ import logging
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from src.Config import GOOGLE_CLIENT_ID, AUTHORIZED_ADMIN_EMAILS
+from src.Database import database
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -95,11 +96,40 @@ def is_admin(request: Request) -> bool:
 def require_auth(request: Request):
     # Check session first
     if request.session.get("authenticated"):
-        return True
+        # For local auth, return the username
+        username = request.session.get("username")
+        # For Google auth, check if user has Telegram verification
+        if request.session.get("auth_method") == "google":
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+        # For local auth (admin), return the Telegram user ID if available
+        elif request.session.get("auth_method") == "local":
+            # Check if the admin user has a Telegram user ID
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+            return "admin"
+        return username
     
     # Check if authenticated via token (from middleware)
     if hasattr(request.state, 'authenticated_via_token') and request.state.authenticated_via_token:
-        return True
+        # Return the username from token data
+        token_data = getattr(request.state, 'auth_token_data', {})
+        username = token_data.get("username")
+        # For Google auth, check if user has Telegram verification
+        if token_data.get("auth_method") == "google":
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+        # For local auth (admin), return the Telegram user ID if available
+        elif token_data.get("auth_method") == "local":
+            # Check if the admin user has a Telegram user ID
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+            return "admin"
+        return username
     
     raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -115,5 +145,19 @@ def require_admin(request: Request):
 
 def get_current_user(request: Request) -> Optional[str]:
     if is_authenticated(request):
-        return request.session.get("username")
+        # For local auth, return the username
+        username = request.session.get("username")
+        # For Google auth, check if user has Telegram verification
+        if request.session.get("auth_method") == "google":
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+        # For local auth (admin), return the Telegram user ID if available
+        elif request.session.get("auth_method") == "local":
+            # Check if the admin user has a Telegram user ID
+            user_data = database.Users.getUser(username)
+            if user_data and user_data.get("telegram_user_id"):
+                return str(user_data.get("telegram_user_id"))
+            return "admin"
+        return username
     return None

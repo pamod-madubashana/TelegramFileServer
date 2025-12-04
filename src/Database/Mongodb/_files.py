@@ -22,6 +22,7 @@ class FileData:
     file_name: str|None = None
     file_caption: str = None
     file_path: str = "/"  # Path where file is located, default is root
+    owner_id: str = None  # Owner user ID for multi-user support
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -39,10 +40,10 @@ class Files(Collection):
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
     
-    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/"):
+    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/", owner_id: str = None):
         saved = self.check_if_exists(chat_id, message_id, file_unique_id)
         if not saved:
-            self.insert_one({
+            file_doc = {
                 "chat_id": chat_id,
                 "message_id": message_id,
                 "thumbnail": thumbnail,
@@ -52,14 +53,27 @@ class Files(Collection):
                 "file_name": file_name,
                 "file_caption": file_caption,
                 "file_path": file_path  # Store file path
-            })
+            }
+            
+            # Add owner_id if provided
+            if owner_id:
+                file_doc["owner_id"] = owner_id
+            
+            self.insert_one(file_doc)
             return True
         return None
 
-    def add_folder(self, folder_name: str, folder_path: str = "/"):
+    def add_folder(self, folder_name: str, folder_path: str = "/", owner_id: str = None):
         """Add a folder entry to the database"""
         # Check if folder already exists
-        existing = self.find_one({"file_name": folder_name, "file_path": folder_path, "file_type": "folder"})
+        query = {"file_name": folder_name, "file_path": folder_path, "file_type": "folder"}
+        # Include owner_id in query if provided
+        if owner_id:
+            query["owner_id"] = owner_id
+        elif "owner_id" not in query:
+            query["owner_id"] = {"$exists": False}
+            
+        existing = self.find_one(query)
         if existing:
             return False
             
@@ -68,7 +82,7 @@ class Files(Collection):
         folder_unique_id = f"folder_{hashlib.md5(f'{folder_path}/{folder_name}'.encode()).hexdigest()}"
             
         # Insert folder entry
-        self.insert_one({
+        folder_doc = {
             "chat_id": 0,  # System-created folder
             "message_id": 0,  # System-created folder
             "thumbnail": None,
@@ -78,11 +92,22 @@ class Files(Collection):
             "file_name": folder_name,
             "file_caption": folder_name,
             "file_path": folder_path
-        })
+        }
+        
+        # Add owner_id if provided
+        if owner_id:
+            folder_doc["owner_id"] = owner_id
+            
+        self.insert_one(folder_doc)
         return True
 
-    def get_all_files(self):
-        files = self.find()
+    def get_all_files(self, owner_id: str = None):
+        # Filter by owner_id if provided
+        query = {}
+        if owner_id:
+            query["owner_id"] = owner_id
+        
+        files = self.find(query)
         return [FileData(
             id=file.get("_id"), 
             chat_id=file.get("chat_id"), 
@@ -93,20 +118,27 @@ class Files(Collection):
             file_size=file.get("file_size"), 
             file_name=file.get("file_name"), 
             file_caption=file.get("file_caption"),
-            file_path=file.get("file_path", "/")  # Default to root if not set
+            file_path=file.get("file_path", "/"),  # Default to root if not set
+            owner_id=file.get("owner_id")
             ) for file in files]
     
-    def get_files_by_path(self, path: str = "/"):
+    def get_files_by_path(self, path: str = "/", owner_id: str = None):
         """Get files and folders for a specific path"""
+        # Build query with owner filter
+        def build_query(base_query):
+            if owner_id:
+                base_query["owner_id"] = owner_id
+            return base_query
+        
         # Special case: fetch all files (for virtual folders like Images, Documents, etc.)
         if path == "all":
             # Get all files except folders
-            files_query = {"file_type": {"$ne": "folder"}}
+            files_query = build_query({"file_type": {"$ne": "folder"}})
             all_items = list(self.find(files_query))
         # For root path, get files with path="/" and folders with path="/"
         elif path == "/" or path == "Home":
             # Get root-level files and folders
-            files_query = {"file_path": "/", "$or": [{"file_type": {"$ne": "folder"}}, {"file_type": "folder"}]}
+            files_query = build_query({"file_path": "/", "$or": [{"file_type": {"$ne": "folder"}}, {"file_type": "folder"}]})
             all_items = list(self.find(files_query))
         # Handle virtual folders with proper paths like /Home/Images
         elif path.startswith("/Home/"):
@@ -126,19 +158,21 @@ class Files(Collection):
             file_type = folder_to_type.get(folder_name)
             if file_type:
                 # Get both files of the specified type AND folders at this path
-                files_query = {"$or": [
+                files_query = build_query({"$or": [
                     {"file_type": file_type},
                     {"file_type": "folder", "file_path": path}
-                ]}
+                ]})
                 all_items = list(self.find(files_query))
             else:
                 # If it's not a recognized virtual folder, treat as regular folder
-                files_query = {"file_path": path}
+                files_query = build_query({"file_path": path})
                 all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder
             # For a path like "/TestFolder", we want files where file_path = "/TestFolder"
-            query = {"file_path": path}
+            base_query = {"file_path": path}
+            query = build_query(base_query)
+            logger.info(f"Executing file query: {query}")
             all_items = list(self.find(query))
         
         return [FileData(
@@ -151,21 +185,27 @@ class Files(Collection):
             file_size=file.get("file_size"), 
             file_name=file.get("file_name"), 
             file_caption=file.get("file_caption"),
-            file_path=file.get("file_path", "/")
+            file_path=file.get("file_path", "/"),
+            owner_id=file.get("owner_id")
         ) for file in all_items]
     
-    def create_folder(self, folder_name: str, current_path: str = "/"):
+    def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
         """Create a folder entry in the database"""
         # The folder's path is where it's located, which is the current_path
         # e.g., if we're in "/" and create "TestFolder", the folder's path is "/"
         # if we're in "/TestFolder" and create "SubFolder", the folder's path is "/TestFolder"
         folder_path = current_path
         
-        return self.add_folder(folder_name, folder_path)
+        return self.add_folder(folder_name, folder_path, owner_id)
 
-    def get_file_by_unique_id(self, file_unique_id: str):
+    def get_file_by_unique_id(self, file_unique_id: str, owner_id: str = None):
         """Get a file by its unique ID"""
-        file_data = self.find_one({"file_unique_id": file_unique_id})
+        # Build query with owner filter
+        query = {"file_unique_id": file_unique_id}
+        if owner_id:
+            query["owner_id"] = owner_id
+            
+        file_data = self.find_one(query)
         if not file_data:
             return None
         
@@ -179,21 +219,43 @@ class Files(Collection):
             file_size=file_data.get("file_size"), 
             file_name=file_data.get("file_name"), 
             file_caption=file_data.get("file_caption"),
-            file_path=file_data.get("file_path", "/")
+            file_path=file_data.get("file_path", "/"),
+            owner_id=file_data.get("owner_id")
         )
 
-    def rename_file(self, file_id: str, new_name: str) -> bool:
+    def check_file_owner(self, file_id: str, owner_id: str) -> bool:
+        """Check if a user owns a file or folder"""
+        from bson import ObjectId
+        
+        # Build query with owner filter
+        query = {"_id": ObjectId(file_id), "owner_id": owner_id}
+        file_data = self.find_one(query)
+        return file_data is not None
+    
+    def check_file_owner_by_unique_id(self, file_unique_id: str, owner_id: str) -> bool:
+        """Check if a user owns a file or folder by its unique ID"""
+        # Build query with owner filter
+        query = {"file_unique_id": file_unique_id, "owner_id": owner_id}
+        file_data = self.find_one(query)
+        return file_data is not None
+    
+    def rename_file(self, file_id: str, new_name: str, owner_id: str = None) -> bool:
         """Rename a file or folder"""
         from bson import ObjectId
         
+        # Build query with owner filter
+        query = {"_id": ObjectId(file_id)}
+        if owner_id:
+            query["owner_id"] = owner_id
+            
         # Find the file/folder by ID
-        file_data = self.find_one({"_id": ObjectId(file_id)})
+        file_data = self.find_one(query)
         if not file_data:
             return False
             
         # Update the file/folder name
         result = self.update_one(
-            {"_id": ObjectId(file_id)},
+            query,
             {"$set": {"file_name": new_name}}
         )
         
@@ -215,9 +277,13 @@ class Files(Collection):
             else:
                 new_full_path = f"{old_path}/{new_name}"
             
-            # Update all files that are directly in this folder
+            # Update all files that are directly in this folder (with owner filter)
+            folder_update_query = {"file_path": old_full_path}
+            if owner_id:
+                folder_update_query["owner_id"] = owner_id
+                
             self.update_many(
-                {"file_path": old_full_path},
+                folder_update_query,
                 {"$set": {"file_path": new_full_path}}
             )
             
@@ -225,8 +291,12 @@ class Files(Collection):
             import re
             regex_pattern = f"^{re.escape(old_full_path)}/"
             
-            # Find all files with paths starting with old_full_path + "/"
-            subfolder_files = self.find({"file_path": {"$regex": regex_pattern}})
+            # Find all files with paths starting with old_full_path + "/" (with owner filter)
+            subfolder_query = {"file_path": {"$regex": regex_pattern}}
+            if owner_id:
+                subfolder_query["owner_id"] = owner_id
+                
+            subfolder_files = self.find(subfolder_query)
             for file in subfolder_files:
                 new_file_path = file["file_path"].replace(old_full_path, new_full_path, 1)
                 self.update_one(

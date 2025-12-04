@@ -1,6 +1,6 @@
 # Telegram File Server
 
-Telegram File Server is a powerful, self-hosted media server application that integrates with Telegram bots to provide file storage, organization, and streaming capabilities through a web interface.
+Telegram File Server is a powerful, self-hosted media server application that integrates with Telegram bots to provide file storage, organization, and streaming capabilities through a web interface. It now supports multi-user access with per-file ownership and access control.
 
 ## Features
 
@@ -9,6 +9,7 @@ Telegram File Server is a powerful, self-hosted media server application that in
 - **File Management**: Organize files in folders, search, and filter by type
 - **Media Streaming**: Built-in support for streaming videos, images, documents, and audio
 - **Authentication**: Secure login with local accounts or Google OAuth
+- **Multi-User Support**: Per-file ownership and access control
 - **Database Storage**: MongoDB integration for storing file metadata
 - **Auto Updates**: GitHub webhook support for automatic deployment updates
 - **Multi-Bot Support**: Manage multiple Telegram bots from a single interface
@@ -112,6 +113,16 @@ docker run -p 8000:8000 telegram-file-server
 
 The application supports Heroku deployment through the provided `app.json` and `heroku.yml`.
 
+## Multi-User Model
+
+The Telegram File Server now supports multiple users with per-file ownership and access control:
+
+- Each file and folder is associated with an owner (user ID)
+- Users can only access files they own
+- Files uploaded via Telegram are associated with the Telegram account owner
+- All file operations (view, move, copy, delete, rename) are restricted to owners
+- Admin users can access all files
+
 ## Configuration
 
 ### Environment Variables
@@ -151,11 +162,11 @@ The bot supports various commands for file management:
 
 - `GET /` - Application information
 - `POST /api/auth/login` - User authentication
-- `GET /api/files` - List files in a path
-- `POST /api/folders/create` - Create a new folder
+- `GET /api/files` - List files in a path (filtered by owner)
+- `POST /api/folders/create` - Create a new folder (assigned to current user)
 - `GET /api/bots/info` - Get bot information
 
-Full API documentation is available at `/docs` when the server is running.
+All file operations are restricted to the owner of the files. Full API documentation is available at `/docs` when the server is running.
 
 ## Development
 

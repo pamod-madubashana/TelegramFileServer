@@ -23,6 +23,7 @@ from pyrogram.session import Session , Auth
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from src.Database import database
 from src.Config import APP_NAME
+from ..security.credentials import require_auth, is_authenticated
 
 
 from d4rk.Logs import setup_logger
@@ -277,7 +278,7 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
 
 @router.get("/dl/{file_name:path}")
 @router.head("/dl/{file_name:path}")
-async def stream_handler(request: Request, file_name: str):
+async def stream_handler(request: Request, file_name: str, user_id: str = Depends(require_auth)):
     # For download, explicitly set is_watch to False
     request.state.is_watch = False
     # Handle download request
@@ -299,12 +300,12 @@ async def stream_handler(request: Request, file_name: str):
     try:
         # Search for the file in the Files collection by file name
         # First try exact match
-        file_data = database.Files.find_one({"file_name": decoded_file_name})
+        file_data = database.Files.find_one({"file_name": decoded_file_name, "owner_id": user_id})
         
         # If not found, try with path variations
         if not file_data:
             # Try with leading slash
-            file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/"})
+            file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/", "owner_id": user_id})
         
         # If still not found, try to extract the file name from a path
         if not file_data:
@@ -312,7 +313,7 @@ async def stream_handler(request: Request, file_name: str):
             import os
             extracted_filename = os.path.basename(decoded_file_name)
             if extracted_filename != decoded_file_name:
-                file_data = database.Files.find_one({"file_name": extracted_filename})
+                file_data = database.Files.find_one({"file_name": extracted_filename, "owner_id": user_id})
         
         if not file_data:
             print(f"File not found in database for name: {decoded_file_name}")
@@ -490,7 +491,7 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
 
 
 @router.get("/watch/{file_name:path}")
-async def watch_handler(request: Request, file_name: str):
+async def watch_handler(request: Request, file_name: str, user_id: str = Depends(require_auth)):
     # Check if this is a request for the video content (not the player page)
     # We can detect this by checking if the Accept header contains video/ but NOT text/html
     # This prevents browsers from accidentally triggering streaming when they want the player page
@@ -504,24 +505,24 @@ async def watch_handler(request: Request, file_name: str):
     if "video/" in accept_header and "text/html" not in accept_header:
         # This is a request for the video content, stream it
         request.state.is_watch = True
-        return await stream_handler(request, file_name)
+        return await stream_handler(request, file_name, user_id)
     # Also check for direct range requests which are typically video streaming requests
     elif request.headers.get("Range"):
         # This is a range request, definitely a streaming request
         request.state.is_watch = True
-        return await stream_handler(request, file_name)
+        return await stream_handler(request, file_name, user_id)
     else:
         # This is a request for the video player page
         # Look up the file in the database using the file name
         try:
             # Search for the file in the Files collection by file name
             # First try exact match
-            file_data = database.Files.find_one({"file_name": decoded_file_name})
+            file_data = database.Files.find_one({"file_name": decoded_file_name, "owner_id": user_id})
             
             # If not found, try with path variations
             if not file_data:
                 # Try with leading slash
-                file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/"})
+                file_data = database.Files.find_one({"file_name": decoded_file_name, "file_path": "/", "owner_id": user_id})
             
             if not file_data:
                 print(f"File not found in database for name: {decoded_file_name}")
