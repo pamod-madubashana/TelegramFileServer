@@ -899,6 +899,7 @@ class UserResponse(BaseModel):
     permissions: UserPermission
     created_at: str
     last_active: Optional[str] = None
+    user_type: Optional[str] = None  # "local" or "google"
 
 
 class UsersResponse(BaseModel):
@@ -906,8 +907,9 @@ class UsersResponse(BaseModel):
 
 
 class AddUserRequest(BaseModel):
-    username: str
+    username: Optional[str] = None
     email: Optional[str] = None
+    password: Optional[str] = None
     permissions: UserPermission
 
 
@@ -986,29 +988,48 @@ async def get_users(request: Request, user_id: str = Depends(require_auth)):
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get all users from database
-        # This is a simplified implementation - in a real app you'd query the database
+        # Get all users from database
+        all_users = database.Users.get_all_users()
+        
         users = []
         
-        # Add admin user
-        users.append(UserResponse(
+        # Process each user
+        for user_doc in all_users:
+            # Skip admin user as we'll add it separately with full details
+            if user_doc.get("user_id") == "admin":
+                continue
+                
+            # Get user permissions
+            user_permissions = user_doc.get("permissions", {})
+            
+            # Determine user type
+            user_type = "local" if (user_doc.get("user_id") and not user_doc.get("user_id").startswith("google_")) else "google"
+            
+            # Add user to the list
+            users.append(UserResponse(
+                id=str(user_doc.get("_id")),
+                username=user_doc.get("user_id", ""),
+                email=user_doc.get("email"),
+                permissions=UserPermission(
+                    read=user_permissions.get("read", True),
+                    write=user_permissions.get("write", False)
+                ),
+                created_at=user_doc.get("created_at", datetime.datetime.now().strftime("%Y-%m-%d")),
+                user_type=user_type
+            ))
+        
+        # Add admin user with full details
+        admin_user = database.Users.getUser("admin")
+        users.insert(0, UserResponse(
             id="1",
             username="admin",
-            email="admin@example.com",
+            email=admin_user.get("email") if admin_user else "admin@example.com",
             telegram_user_id=user_data.get("telegram_user_id"),
             telegram_username=user_data.get("telegram_username"),
             permissions=UserPermission(read=True, write=True),
-            created_at="2023-01-01",
-            last_active="2023-12-01"
-        ))
-        
-        # Add a sample user
-        users.append(UserResponse(
-            id="2",
-            username="user1",
-            email="user1@example.com",
-            permissions=UserPermission(read=True, write=False),
-            created_at="2023-06-01",
-            last_active="2023-11-30"
+            created_at=admin_user.get("created_at", "2023-01-01") if admin_user else "2023-01-01",
+            last_active=admin_user.get("last_active", "2023-12-01") if admin_user else "2023-12-01",
+            user_type="local"
         ))
         
         return UsersResponse(users=users)
@@ -1030,14 +1051,57 @@ async def add_user(request: Request, user_request: AddUserRequest, user_id: str 
         if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
-        # Create new user
-        # This is a simplified implementation - in a real app you'd save to the database
+        # Validate input based on user type
+        if not user_request.email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        # For local users, username and password are required
+        if user_request.username and not user_request.password:
+            raise HTTPException(status_code=400, detail="Password is required for local users")
+        
+        # For Google users, only email is required
+        if not user_request.username and user_request.password:
+            raise HTTPException(status_code=400, detail="Username is required for local users")
+        
+        # Check if user already exists
+        existing_user = None
+        if user_request.username:
+            existing_user = database.Users.getUser(user_request.username)
+        
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User already exists")
+        
+        # Hash password if provided
+        password_hash = None
+        if user_request.password:
+            password_hash = hashlib.sha256(user_request.password.encode()).hexdigest()
+        
+        # Save user to database
+        user_id_for_db = user_request.username if user_request.username else f"google_{user_request.email}"
+        save_result = database.Users.SaveUser(
+            user_id=user_id_for_db,
+            password_hash=password_hash,
+            email=user_request.email
+        )
+        
+        # Save permissions
+        permissions_dict = {
+            "read": user_request.permissions.read,
+            "write": user_request.permissions.write
+        }
+        database.Users.update_permissions(user_id_for_db, permissions_dict)
+        
+        # Determine user type
+        user_type = "local" if user_request.username else "google"
+        
+        # Create response
         new_user = UserResponse(
-            id="3",  # In a real app, this would be generated
-            username=user_request.username,
+            id=str(save_result.inserted_id) if save_result else "unknown",
+            username=user_request.username or "",
             email=user_request.email,
             permissions=user_request.permissions,
             created_at=datetime.datetime.now().strftime("%Y-%m-%d"),
+            user_type=user_type
         )
         
         return new_user
@@ -1059,15 +1123,37 @@ async def update_user(request: Request, user_id_param: str, user_request: Update
         if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
-        # Update user
-        # This is a simplified implementation - in a real app you'd update in the database
+        # Find the user to update
+        # In a real implementation, you would query by user ID
+        
+        # Update user email in database
+        if user_request.email:
+            database.Users.save_email(user_id_param, user_request.email)
+        
+        # Update user permissions in database
+        permissions_dict = {
+            "read": user_request.permissions.read,
+            "write": user_request.permissions.write
+        }
+        database.Users.update_permissions(user_id_param, permissions_dict)
+        
+        # Get current user data
+        current_user = database.Users.getUser(user_id_param)
+        
+        # Determine user type based on whether username exists
+        user_type = "local" if (current_user and current_user.get("user_id") and not current_user.get("user_id").startswith("google_")) else "google"
+        
         updated_user = UserResponse(
             id=user_id_param,
-            username="user1",  # In a real app, you'd fetch this from the database
-            email=user_request.email or "user1@example.com",
-            permissions=user_request.permissions,
-            created_at="2023-06-01",
-            last_active="2023-12-01"
+            username=current_user.get("user_id", "Unknown") if current_user else "Unknown",
+            email=user_request.email or (current_user.get("email") if current_user else None),
+            permissions=UserPermission(
+                read=user_request.permissions.read,
+                write=user_request.permissions.write
+            ),
+            created_at=current_user.get("created_at", datetime.datetime.now().strftime("%Y-%m-%d")) if current_user else datetime.datetime.now().strftime("%Y-%m-%d"),
+            last_active=current_user.get("last_active") if current_user else None,
+            user_type=user_type
         )
         
         return updated_user
@@ -1093,8 +1179,11 @@ async def delete_user(request: Request, user_id_param: str, user_id: str = Depen
         if user_id_param == "1":
             raise HTTPException(status_code=400, detail="Cannot delete admin user")
         
-        # Delete user
-        # This is a simplified implementation - in a real app you'd delete from the database
+        # Delete user from database
+        success = database.Users.delete_user(user_id_param)
+        if not success:
+            raise HTTPException(status_code=404, detail="User not found")
+        
         return {"message": "User deleted successfully"}
     except HTTPException:
         raise
