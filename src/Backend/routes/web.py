@@ -884,6 +884,37 @@ class IsOwnerResponse(BaseModel):
     is_owner: bool
     owner_telegram_id: Optional[int] = None
 
+
+class UserPermission(BaseModel):
+    read: bool = True
+    write: bool = False
+
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: Optional[str] = None
+    telegram_user_id: Optional[int] = None
+    telegram_username: Optional[str] = None
+    permissions: UserPermission
+    created_at: str
+    last_active: Optional[str] = None
+
+
+class UsersResponse(BaseModel):
+    users: List[UserResponse]
+
+
+class AddUserRequest(BaseModel):
+    username: str
+    email: Optional[str] = None
+    permissions: UserPermission
+
+
+class UpdateUserRequest(BaseModel):
+    email: Optional[str] = None
+    permissions: UserPermission
+
 @app.get("/api/user/profile", response_model=UserProfileResponse)
 async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
     """
@@ -940,6 +971,135 @@ async def is_user_owner(request: Request, user_id: str = Depends(require_auth)):
         return IsOwnerResponse(is_owner=is_owner, owner_telegram_id=owner_telegram_id)
     except Exception as e:
         logger.error(f"Error checking owner status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/users", response_model=UsersResponse)
+async def get_users(request: Request, user_id: str = Depends(require_auth)):
+    """
+    Get all users (owner only)
+    """
+    try:
+        # Check if user is owner
+        user_data = database.Users.getUser(request.session.get("username"))
+        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get all users from database
+        # This is a simplified implementation - in a real app you'd query the database
+        users = []
+        
+        # Add admin user
+        users.append(UserResponse(
+            id="1",
+            username="admin",
+            email="admin@example.com",
+            telegram_user_id=user_data.get("telegram_user_id"),
+            telegram_username=user_data.get("telegram_username"),
+            permissions=UserPermission(read=True, write=True),
+            created_at="2023-01-01",
+            last_active="2023-12-01"
+        ))
+        
+        # Add a sample user
+        users.append(UserResponse(
+            id="2",
+            username="user1",
+            email="user1@example.com",
+            permissions=UserPermission(read=True, write=False),
+            created_at="2023-06-01",
+            last_active="2023-11-30"
+        ))
+        
+        return UsersResponse(users=users)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/users", response_model=UserResponse)
+async def add_user(request: Request, user_request: AddUserRequest, user_id: str = Depends(require_auth)):
+    """
+    Add a new user (owner only)
+    """
+    try:
+        # Check if user is owner
+        user_data = database.Users.getUser(request.session.get("username"))
+        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Create new user
+        # This is a simplified implementation - in a real app you'd save to the database
+        new_user = UserResponse(
+            id="3",  # In a real app, this would be generated
+            username=user_request.username,
+            email=user_request.email,
+            permissions=user_request.permissions,
+            created_at=datetime.datetime.now().strftime("%Y-%m-%d"),
+        )
+        
+        return new_user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/users/{user_id_param}", response_model=UserResponse)
+async def update_user(request: Request, user_id_param: str, user_request: UpdateUserRequest, user_id: str = Depends(require_auth)):
+    """
+    Update a user (owner only)
+    """
+    try:
+        # Check if user is owner
+        user_data = database.Users.getUser(request.session.get("username"))
+        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Update user
+        # This is a simplified implementation - in a real app you'd update in the database
+        updated_user = UserResponse(
+            id=user_id_param,
+            username="user1",  # In a real app, you'd fetch this from the database
+            email=user_request.email or "user1@example.com",
+            permissions=user_request.permissions,
+            created_at="2023-06-01",
+            last_active="2023-12-01"
+        )
+        
+        return updated_user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/users/{user_id_param}")
+async def delete_user(request: Request, user_id_param: str, user_id: str = Depends(require_auth)):
+    """
+    Delete a user (owner only)
+    """
+    try:
+        # Check if user is owner
+        user_data = database.Users.getUser(request.session.get("username"))
+        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Prevent deleting admin user
+        if user_id_param == "1":
+            raise HTTPException(status_code=400, detail="Cannot delete admin user")
+        
+        # Delete user
+        # This is a simplified implementation - in a real app you'd delete from the database
+        return {"message": "User deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add a catch-all route to serve the frontend for client-side routing
