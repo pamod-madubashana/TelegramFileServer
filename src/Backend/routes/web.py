@@ -278,10 +278,10 @@ async def move_file_route(request: MoveFileRequest, user_id: str = Depends(requi
         if not file_data:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Update the file's path
+        # Update the file's path and modified date
         database.Files.update_one(
             {"_id": ObjectId(request.file_id), "owner_id": user_id},
-            {"$set": {"file_path": request.target_path}}
+            {"$set": {"file_path": request.target_path, "modified_date": datetime.utcnow().isoformat()}}
         )
         
         return {"message": "File moved successfully"}
@@ -305,6 +305,7 @@ async def copy_file_route(request: CopyFileRequest, user_id: str = Depends(requi
         new_file_data = file_data.copy()
         new_file_data["_id"] = ObjectId()  # Generate new ID
         new_file_data["file_path"] = request.target_path
+        new_file_data["modified_date"] = datetime.utcnow().isoformat()  # Set new modified date for copied file
         # Preserve the owner when copying
         new_file_data["owner_id"] = user_id
         

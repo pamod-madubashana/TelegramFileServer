@@ -101,7 +101,6 @@ class IndexMessages:
             logger.info(f"Processing file message {message.caption or file_name} -> {file_path}")
             file_unique_id = media.file_unique_id
             file_size = media.file_size
-            file_size = int(media.file_size/1024/1024)
             file_caption = message.caption or "N/A"
             # Use the owner ID from the indexer (the user who initiated the indexing)
             owner_id = self.owner_id

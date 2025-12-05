@@ -3,6 +3,7 @@
 from typing import Any, Literal
 from dataclasses import dataclass
 from d4rk.Logs import setup_logger
+from datetime import datetime
 
 from pymongo.collection import Collection
 from pymongo.results import InsertOneResult, UpdateResult
@@ -23,6 +24,7 @@ class FileData:
     file_caption: str = None
     file_path: str = "/"  # Path where file is located, default is root
     owner_id: str = None  # Owner user ID for multi-user support
+    modified_date: str = None  # ISO format date string for when file was last modified
     
 class Files(Collection):
     def __init__(self,collection: Collection) -> None:
@@ -40,7 +42,7 @@ class Files(Collection):
         r = self.find_one({"chat_id": chat_id, "message_id": message_id, "file_unique_id": file_unique_id})
         return False if not r else True
     
-    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/", owner_id: str = None):
+    def add_file(self, chat_id: int, message_id: int, thumbnail: str, file_type: str, file_unique_id: str, file_size: int, file_name: str, file_caption: str, file_path: str = "/", owner_id: str = None, modified_date: str = None):
         saved = self.check_if_exists(chat_id, message_id, file_unique_id)
         if not saved:
             file_doc = {
@@ -52,7 +54,8 @@ class Files(Collection):
                 "file_size": file_size,
                 "file_name": file_name,
                 "file_caption": file_caption,
-                "file_path": file_path  # Store file path
+                "file_path": file_path,  # Store file path
+                "modified_date": modified_date or datetime.utcnow().isoformat()  # Set current time if not provided
             }
             
             # Add owner_id if provided
@@ -91,7 +94,8 @@ class Files(Collection):
             "file_size": 0,
             "file_name": folder_name,
             "file_caption": folder_name,
-            "file_path": folder_path
+            "file_path": folder_path,
+            "modified_date": datetime.utcnow().isoformat()  # Set current time for folder creation
         }
         
         # Add owner_id if provided
@@ -119,7 +123,8 @@ class Files(Collection):
             file_name=file.get("file_name"), 
             file_caption=file.get("file_caption"),
             file_path=file.get("file_path", "/"),  # Default to root if not set
-            owner_id=file.get("owner_id")
+            owner_id=file.get("owner_id"),
+            modified_date=file.get("modified_date")
             ) for file in files]
     
     def get_files_by_path(self, path: str = "/", owner_id: str = None):
@@ -186,7 +191,8 @@ class Files(Collection):
             file_name=file.get("file_name"), 
             file_caption=file.get("file_caption"),
             file_path=file.get("file_path", "/"),
-            owner_id=file.get("owner_id")
+            owner_id=file.get("owner_id"),
+            modified_date=file.get("modified_date")
         ) for file in all_items]
     
     def create_folder(self, folder_name: str, current_path: str = "/", owner_id: str = None):
@@ -220,7 +226,8 @@ class Files(Collection):
             file_name=file_data.get("file_name"), 
             file_caption=file_data.get("file_caption"),
             file_path=file_data.get("file_path", "/"),
-            owner_id=file_data.get("owner_id")
+            owner_id=file_data.get("owner_id"),
+            modified_date=file_data.get("modified_date")
         )
 
     def check_file_owner(self, file_id: str, owner_id: str) -> bool:
@@ -253,10 +260,10 @@ class Files(Collection):
         if not file_data:
             return False
             
-        # Update the file/folder name
+        # Update the file/folder name and modified date
         result = self.update_one(
             query,
-            {"$set": {"file_name": new_name}}
+            {"$set": {"file_name": new_name, "modified_date": datetime.utcnow().isoformat()}}
         )
         
         # If this is a folder, we need to update the paths of all contained files
@@ -284,7 +291,7 @@ class Files(Collection):
                 
             self.update_many(
                 folder_update_query,
-                {"$set": {"file_path": new_full_path}}
+                {"$set": {"file_path": new_full_path, "modified_date": datetime.utcnow().isoformat()}}
             )
             
             # Update files in subfolders (paths that start with old_full_path + "/")
@@ -301,7 +308,7 @@ class Files(Collection):
                 new_file_path = file["file_path"].replace(old_full_path, new_full_path, 1)
                 self.update_one(
                     {"_id": file["_id"]},
-                    {"$set": {"file_path": new_file_path}}
+                    {"$set": {"file_path": new_file_path, "modified_date": datetime.utcnow().isoformat()}}
                 )
         
         return result.modified_count > 0
