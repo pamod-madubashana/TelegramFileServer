@@ -1,50 +1,58 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# Telegram File Server Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Microservice Architecture
+Every feature should be designed as an independent module that can function separately; Modules must be loosely coupled, independently deployable, and well-documented; Clear boundaries and responsibilities are required - no monolithic components
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. API-First Approach
+All functionality must be exposed through well-defined APIs; RESTful protocols: HTTP verbs → standardized responses, errors → proper status codes; Support JSON formats for interoperability
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Test-First Development (NON-NEGOTIABLE)
+TDD is mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced for all features
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Integration Testing
+Focus areas requiring integration tests: New API endpoint validation, Database interaction testing, Telegram bot communication, File operation workflows
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Observability & Simplicity
+Structured logging is required for all components; Start simple with essential features only (YAGNI); Avoid premature optimization and over-engineering
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Technology Stack & Constraints
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### Backend Requirements
+- Python 3.12+ with FastAPI framework
+- Pyrogram library for Telegram integration
+- MongoDB for data persistence
+- Uvicorn ASGI server for deployment
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### Frontend Requirements
+- React 18+ with TypeScript
+- Vite build tool
+- TailwindCSS for styling
+- shadcn/ui component library
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### Deployment Standards
+- Docker containerization support
+- Systemd service configuration for Linux
+- Heroku deployment compatibility
+- Cross-platform support (Windows, macOS, Linux)
+
+## Development Workflow
+
+### Code Review Process
+- All pull requests require peer review
+- Automated testing must pass before merge
+- Security scanning for dependencies
+- Documentation updates required for feature changes
+
+### Quality Gates
+- Minimum 80% code coverage for new features
+- Performance benchmarks for critical paths
+- Security audit for authentication components
+- Manual testing for user-facing features
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Constitution supersedes all other development practices; Amendments require documentation, stakeholder approval, and migration plan; All PRs/reviews must verify compliance with these principles; Complexity must be justified with clear benefits
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2025-12-05 | **Last Amended**: 2025-12-05
