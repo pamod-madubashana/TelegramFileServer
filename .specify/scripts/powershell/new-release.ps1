@@ -51,5 +51,8 @@ git commit -m $commitMessage
 # Show the status
 git status
 
+# Push the changes
+git push
+
 Write-Host "Release $Version has been prepared successfully!" -ForegroundColor Green
 Write-Host "To push the release, run: git push" -ForegroundColor Yellow
