@@ -410,7 +410,7 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
         
         # Add the chat ID to user data as index_chat_id
         database.Users.update_one(
-            {"telegram_user_id": str(user_id)},
+            {"telegram_user_id": int(user_id)},
             {"$set": {"index_chat_id": callback.message.chat.id}},
             upsert=True
         )
