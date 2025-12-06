@@ -278,10 +278,48 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
 
 @router.get("/dl/{file_name:path}")
 @router.head("/dl/{file_name:path}")
-async def stream_handler(request: Request, file_name: str, user_id: str = Depends(require_auth)):
+async def stream_handler(request: Request, file_name: str, auth_token: str = None):
     # For download, explicitly set is_watch to False
     request.state.is_watch = False
     # Handle download request
+    
+    # First try to get user_id from session auth
+    user_id = None
+    try:
+        user_id = require_auth(request)
+    except HTTPException:
+        # If session auth fails, we'll try token auth below
+        pass
+    
+    # If we don't have a user_id from session auth, check for auth_token in query params (for Tauri/desktop apps)
+    if not user_id and auth_token:
+        # Check if the token exists in our token store
+        from .web import _auth_tokens
+        if auth_token in _auth_tokens:
+            token_data = _auth_tokens[auth_token]
+            # Extract user_id from token data
+            username = token_data.get("username")
+            # For Google auth, check if user has Telegram verification
+            if token_data.get("auth_method") == "google":
+                user_data = database.Users.getUser(username)
+                if user_data and user_data.get("telegram_user_id"):
+                    user_id = str(user_data.get("telegram_user_id"))
+                else:
+                    user_id = username
+            # For local auth (admin), return the Telegram user ID if available
+            elif token_data.get("auth_method") == "local":
+                # Check if the admin user has a Telegram user ID
+                user_data = database.Users.getUser(username)
+                if user_data and user_data.get("telegram_user_id"):
+                    user_id = str(user_data.get("telegram_user_id"))
+                else:
+                    user_id = "admin"
+            else:
+                user_id = username
+    
+    # If still no valid authentication, raise 401
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     
     # Decode URL encoded file name
     import urllib.parse
@@ -491,11 +529,49 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
 
 
 @router.get("/watch/{file_name:path}")
-async def watch_handler(request: Request, file_name: str, user_id: str = Depends(require_auth)):
+async def watch_handler(request: Request, file_name: str, auth_token: str = None):
     # Check if this is a request for the video content (not the player page)
     # We can detect this by checking if the Accept header contains video/ but NOT text/html
     # This prevents browsers from accidentally triggering streaming when they want the player page
     accept_header = request.headers.get("Accept", "")
+    
+    # First try to get user_id from session auth
+    user_id = None
+    try:
+        user_id = require_auth(request)
+    except HTTPException:
+        # If session auth fails, we'll try token auth below
+        pass
+    
+    # If we don't have a user_id from session auth, check for auth_token in query params (for Tauri/desktop apps)
+    if not user_id and auth_token:
+        # Check if the token exists in our token store
+        from .web import _auth_tokens
+        if auth_token in _auth_tokens:
+            token_data = _auth_tokens[auth_token]
+            # Extract user_id from token data
+            username = token_data.get("username")
+            # For Google auth, check if user has Telegram verification
+            if token_data.get("auth_method") == "google":
+                user_data = database.Users.getUser(username)
+                if user_data and user_data.get("telegram_user_id"):
+                    user_id = str(user_data.get("telegram_user_id"))
+                else:
+                    user_id = username
+            # For local auth (admin), return the Telegram user ID if available
+            elif token_data.get("auth_method") == "local":
+                # Check if the admin user has a Telegram user ID
+                user_data = database.Users.getUser(username)
+                if user_data and user_data.get("telegram_user_id"):
+                    user_id = str(user_data.get("telegram_user_id"))
+                else:
+                    user_id = "admin"
+            else:
+                user_id = username
+    
+    # If still no valid authentication, raise 401
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     
     # Decode URL encoded file name
     import urllib.parse
@@ -505,12 +581,12 @@ async def watch_handler(request: Request, file_name: str, user_id: str = Depends
     if "video/" in accept_header and "text/html" not in accept_header:
         # This is a request for the video content, stream it
         request.state.is_watch = True
-        return await stream_handler(request, file_name, user_id)
+        return await stream_handler(request, file_name, auth_token)
     # Also check for direct range requests which are typically video streaming requests
     elif request.headers.get("Range"):
         # This is a range request, definitely a streaming request
         request.state.is_watch = True
-        return await stream_handler(request, file_name, user_id)
+        return await stream_handler(request, file_name, auth_token)
     else:
         # This is a request for the video player page
         # Look up the file in the database using the file name
