@@ -40,10 +40,44 @@ work_loads = {}
 # Maps tokens to session data
 _auth_tokens: Dict[str, Dict] = {}
 
+# Load existing tokens from database on startup
+def load_persistent_tokens(app):
+    """Load persistent auth tokens from database on startup"""
+    try:
+        # Clean up expired tokens first
+        database.Users.cleanup_expired_tokens()
+        
+        # Load all valid tokens from database
+        from datetime import datetime
+        tokens_cursor = database.Users.database.AuthTokens.find({
+            'expires_at': {'$gte': datetime.now()}
+        })
+        
+        loaded_count = 0
+        for token_data in tokens_cursor:
+            auth_token = token_data['auth_token']
+            # Store in memory for fast access
+            _auth_tokens[auth_token] = {
+                "authenticated": True,
+                "username": token_data['username'],
+                "auth_method": token_data['auth_method'],
+                "created_at": token_data['created_at'].isoformat() if hasattr(token_data['created_at'], 'isoformat') else str(token_data['created_at'])
+            }
+            loaded_count += 1
+        
+        logger.info(f"Loaded {loaded_count} persistent auth tokens from database")
+    except Exception as e:
+        logger.error(f"Failed to load persistent auth tokens: {e}")
+
 app = FastAPI(
     title=f"{APP_NAME} Media Server",
-    description=f"A powerful, self-hosted {APP_NAME} Media Server built with FastAPI, MongoDB, and PyroFork seamlessly integrated with Stremio for automated media streaming and discovery.",
+    description=f"A powerful, self-hosted {APP_NAME} built with FastAPI, MongoDB, and PyroFork seamlessly integrated with Stremio for automated media streaming and discovery.",
 )
+
+# Load persistent tokens on startup
+@app.on_event("startup")
+async def startup_event():
+    load_persistent_tokens(app)
 
 # Include stream routes
 app.include_router(stream_router)
@@ -76,12 +110,29 @@ app.add_middleware(
 async def auth_token_middleware(request: Request, call_next):
     """Handle token-based authentication for Tauri/desktop apps"""
     auth_header = request.headers.get("X-Auth-Token")
-    if auth_header and auth_header in _auth_tokens:
-        token_data = _auth_tokens[auth_header]
-        # Add token data to session-like storage for the route handlers
-        request.state.auth_token_data = token_data
-        request.state.authenticated_via_token = True
-        logger.debug(f"Authenticated via auth token for user: {token_data.get('username')}")
+    if auth_header:
+        # First check in-memory cache
+        if auth_header in _auth_tokens:
+            token_data = _auth_tokens[auth_header]
+            # Add token data to session-like storage for the route handlers
+            request.state.auth_token_data = token_data
+            request.state.authenticated_via_token = True
+            logger.debug(f"Authenticated via auth token (cache) for user: {token_data.get('username')}")
+        else:
+            # Check in database if not found in memory
+            db_token_data = database.Users.get_auth_token(auth_header)
+            if db_token_data:
+                # Add to in-memory cache for future requests
+                _auth_tokens[auth_header] = {
+                    "authenticated": True,
+                    "username": db_token_data['username'],
+                    "auth_method": db_token_data['auth_method'],
+                    "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                }
+                # Add token data to session-like storage for the route handlers
+                request.state.auth_token_data = _auth_tokens[auth_header]
+                request.state.authenticated_via_token = True
+                logger.debug(f"Authenticated via auth token (database) for user: {db_token_data['username']}")
     return await call_next(request)
 
 # --- Add logging middleware ---
@@ -124,12 +175,16 @@ async def login_post_route(request: Request, login_data: LoginRequest):
         
         # Generate a token for Tauri/desktop app usage
         auth_token = secrets.token_urlsafe(32)
-        _auth_tokens[auth_token] = {
+        token_data = {
             "authenticated": True,
             "username": login_data.username,
             "auth_method": "local",
             "created_at": datetime.datetime.now().isoformat()
         }
+        _auth_tokens[auth_token] = token_data
+        
+        # Save token to database for persistence
+        database.Users.save_auth_token(login_data.username, auth_token, "local")
         
         return {
             "message": "Login successful",
@@ -155,7 +210,21 @@ async def google_login_route(request: Request, login_data: GoogleLoginRequest):
         request.session["username"] = user_info["name"]
         request.session["user_picture"] = user_info["picture"]
         request.session["auth_method"] = "google"
-        return {"message": "Login successful", "user": user_info}
+        
+        # Generate a token for Tauri/desktop app usage
+        auth_token = secrets.token_urlsafe(32)
+        token_data = {
+            "authenticated": True,
+            "username": user_info["name"],
+            "auth_method": "google",
+            "created_at": datetime.datetime.now().isoformat()
+        }
+        _auth_tokens[auth_token] = token_data
+        
+        # Save token to database for persistence
+        database.Users.save_auth_token(user_info["name"], auth_token, "google")
+        
+        return {"message": "Login successful", "user": user_info, "auth_token": auth_token}
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -171,6 +240,8 @@ async def logout_route(request: Request):
     auth_header = request.headers.get("X-Auth-Token")
     if auth_header and auth_header in _auth_tokens:
         del _auth_tokens[auth_header]
+        # Also remove from database
+        database.Users.remove_auth_token(auth_header)
         logger.info(f"Cleared auth token on logout")
     
     return {"message": "Logged out successfully"}
@@ -830,9 +901,32 @@ async def get_file_thumbnail(file_id: str, request: Request, auth_token: str = N
         require_auth(request)
     except HTTPException:
         # If normal auth fails, check for auth_token in query params
-        if auth_token and auth_token in _auth_tokens:
-            # Token is valid, proceed
-            pass
+        if auth_token:
+            # First check in-memory cache
+            if auth_token in _auth_tokens:
+                # Token is valid, proceed
+                pass
+            else:
+                # Check in database if not found in memory
+                try:
+                    db_token_data = database.Users.get_auth_token(auth_token)
+                    if db_token_data:
+                        # Add to in-memory cache for future requests
+                        _auth_tokens[auth_token] = {
+                            "authenticated": True,
+                            "username": db_token_data['username'],
+                            "auth_method": db_token_data['auth_method'],
+                            "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                        }
+                        # Token is valid, proceed
+                        pass
+                    else:
+                        # No valid authentication method
+                        raise HTTPException(status_code=401, detail="Authentication required")
+                except Exception as e:
+                    logger.error(f"Failed to check auth token in database: {e}")
+                    # No valid authentication method
+                    raise HTTPException(status_code=401, detail="Authentication required")
         else:
             # No valid authentication method
             raise HTTPException(status_code=401, detail="Authentication required")

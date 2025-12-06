@@ -295,8 +295,30 @@ async def stream_handler(request: Request, file_name: str, auth_token: str = Non
     if not user_id and auth_token:
         # Check if the token exists in our token store
         from .web import _auth_tokens
+        token_data = None
+        
+        # First check in-memory cache
         if auth_token in _auth_tokens:
             token_data = _auth_tokens[auth_token]
+        else:
+            # Check in database if not found in memory
+            try:
+                
+                db_token_data = database.Users.get_auth_token(auth_token)
+                if db_token_data:
+                    # Add to in-memory cache for future requests
+                    _auth_tokens[auth_token] = {
+                        "authenticated": True,
+                        "username": db_token_data['username'],
+                        "auth_method": db_token_data['auth_method'],
+                        "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                    }
+                    token_data = _auth_tokens[auth_token]
+            except Exception as e:
+                logger.error(f"Failed to check auth token in database: {e}")
+        
+        # If we found token data, extract user_id
+        if token_data:
             # Extract user_id from token data
             username = token_data.get("username")
             # For Google auth, check if user has Telegram verification
@@ -547,8 +569,29 @@ async def watch_handler(request: Request, file_name: str, auth_token: str = None
     if not user_id and auth_token:
         # Check if the token exists in our token store
         from .web import _auth_tokens
+        token_data = None
+        
+        # First check in-memory cache
         if auth_token in _auth_tokens:
             token_data = _auth_tokens[auth_token]
+        else:
+            # Check in database if not found in memory
+            try:
+                db_token_data = database.Users.get_auth_token(auth_token)
+                if db_token_data:
+                    # Add to in-memory cache for future requests
+                    _auth_tokens[auth_token] = {
+                        "authenticated": True,
+                        "username": db_token_data['username'],
+                        "auth_method": db_token_data['auth_method'],
+                        "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                    }
+                    token_data = _auth_tokens[auth_token]
+            except Exception as e:
+                logger.error(f"Failed to check auth token in database: {e}")
+        
+        # If we found token data, extract user_id
+        if token_data:
             # Extract user_id from token data
             username = token_data.get("username")
             # For Google auth, check if user has Telegram verification
