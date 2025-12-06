@@ -24,3 +24,4 @@ pytz==2025.2
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
+aiofiles==25.1.0
