@@ -24,14 +24,6 @@ async def start_command(client: Client, message: Message) -> None:
             # Check if this is a verification code
             if await handle_verification_code(client, message, data):
                 return
-            # Existing file handling code
-            file = database.Movies.get_movie_file_by_id(data)
-            if file:
-                for f in file.file_data:
-                    await client.copy_message(message.chat.id, f.chat_id, f.message_id)
-                await client.send_message(chat_id=message.chat.id, text=INFO_MSG.format(user_mention=message.from_user.mention),disable_web_page_preview=True)
-            else:
-                await message.reply("File not found")
         else:
             logger.info('start command executed')
             user = message.from_user
@@ -100,7 +92,31 @@ async def handle_verification_code(client: Client, message: Message, code: str) 
         success = database.Users.update_telegram_info(user_id, telegram_data)
         
         if success:
-            await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server.")
+            # Add the user to sudo users list upon successful Telegram verification
+            try:
+                sudo_users_str = database.Settings.get('sudo_users', str) or ''
+                sudo_users = sudo_users_str.split(',') if sudo_users_str else []
+                
+                # Convert telegram user ID to string for comparison
+                telegram_user_id_str = str(message.from_user.id)
+                
+                # Add user to sudo users if not already present
+                if telegram_user_id_str not in sudo_users:
+                    sudo_users.append(telegram_user_id_str)
+                    database.Settings.set('sudo_users', ','.join(sudo_users))
+                    
+                    # Update client's sudo_users if available
+                    if hasattr(client, 'sudo_users'):
+                        client.sudo_users = sudo_users
+                        
+                    logger.info(f"Added user {user_id} (Telegram ID: {telegram_user_id_str}) to sudo users list")
+                
+                await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server. You've been granted sudo privileges.")
+            except Exception as e:
+                logger.error(f"Error adding user to sudo list: {e}")
+                # Still notify user of successful verification even if sudo addition fails
+                await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server.")
+            
             logger.info(f"Telegram verification successful for user {user_id} (Telegram ID: {message.from_user.id})")
         else:
             await message.reply("❌ Verification completed but failed to update user information.")
