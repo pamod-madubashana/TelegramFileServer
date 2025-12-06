@@ -320,3 +320,64 @@ class Users(Collection):
         except Exception as e:
             logger.error(f"Error updating user with identifier {user_identifier}: {e}")
             return False
+
+    def save_auth_token(self, username: str, auth_token: str, auth_method: str) -> None:
+        """Save an auth token for a user"""
+        try:
+            # Save token with user info and expiration time (24 hours from now)
+            from datetime import datetime, timedelta
+            expires_at = datetime.now() + timedelta(hours=24)
+            
+            token_data = {
+                'username': username,
+                'auth_token': auth_token,
+                'auth_method': auth_method,
+                'created_at': datetime.now(),
+                'expires_at': expires_at
+            }
+            
+            # Use upsert to either insert new or update existing token
+            self.database.AuthTokens.update_one(
+                {'auth_token': auth_token},
+                {'$set': token_data},
+                upsert=True
+            )
+            logger.info(f"Saved auth token for user {username}")
+        except Exception as e:
+            logger.error(f"Failed to save auth token for user {username}: {e}")
+
+    def get_auth_token(self, auth_token: str) -> dict:
+        """Retrieve an auth token data"""
+        try:
+            from datetime import datetime
+            # Find token and check if it's expired
+            token_data = self.database.AuthTokens.find_one({'auth_token': auth_token})
+            if token_data:
+                # Check if token is expired
+                if token_data.get('expires_at') and token_data['expires_at'] < datetime.now():
+                    # Token expired, remove it
+                    self.database.AuthTokens.delete_one({'auth_token': auth_token})
+                    return None
+                return token_data
+            return None
+        except Exception as e:
+            logger.error(f"Failed to retrieve auth token {auth_token}: {e}")
+            return None
+
+    def remove_auth_token(self, auth_token: str) -> None:
+        """Remove an auth token"""
+        try:
+            self.database.AuthTokens.delete_one({'auth_token': auth_token})
+            logger.info(f"Removed auth token")
+        except Exception as e:
+            logger.error(f"Failed to remove auth token: {e}")
+
+    def cleanup_expired_tokens(self) -> None:
+        """Remove all expired tokens"""
+        try:
+            from datetime import datetime
+            result = self.database.AuthTokens.delete_many({'expires_at': {'$lt': datetime.now()}})
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} expired auth tokens")
+        except Exception as e:
+            logger.error(f"Failed to cleanup expired auth tokens: {e}")
