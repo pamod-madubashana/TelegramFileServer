@@ -35,6 +35,29 @@ The application consists of three main components:
    - Media organization and categorization
    - User interaction through commands
 
+## Frontend Repository
+
+The frontend is maintained as a separate repository and included in this project as a git submodule:
+- Repository: https://github.com/pamod-madubashana/FileServerApp
+- Location: `src/frontend`
+
+To initialize the submodule, run:
+```bash
+git submodule update --init --recursive
+```
+
+## Windows Desktop Application
+
+A Windows desktop application is available, built with Tauri:
+- Version: v1.0.1
+- Features:
+  - Cross-platform file downloads (browser and desktop)
+  - Advanced download management with progress tracking
+  - File browsing and organization
+  - User authentication and profile management
+  - Multi-user file access control
+  - Settings customization
+
 ## Installation
 
 ### Prerequisites
@@ -180,7 +203,7 @@ The backend is written in Python using FastAPI. Key directories:
 
 ### Frontend Development
 
-The frontend uses React with Vite:
+The frontend uses React with Vite and is located in the `src/frontend` directory:
 ```bash
 cd src/frontend
 npm run dev  # Start development server
@@ -192,6 +215,34 @@ Key directories:
 - `src/frontend/src/hooks/` - Custom React hooks
 - `src/frontend/src/pages/` - Page components
 - `src/frontend/src/lib/` - Utility functions
+
+The frontend is a submodule repository hosted at https://github.com/pamod-madubashana/FileServerApp
+
+### Building the Windows Desktop App
+
+To build the Windows desktop application using Tauri:
+
+1. Navigate to the frontend directory:
+   ```bash
+   cd src/frontend
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Install Tauri CLI globally:
+   ```bash
+   npm install -g @tauri-apps/cli
+   ```
+
+4. Build the desktop app:
+   ```bash
+   npm run tauri build
+   ```
+
+The built application will be available in `src/frontend/src-tauri/target/release/bundle/` with installers for Windows.
 
 ## Security
 
