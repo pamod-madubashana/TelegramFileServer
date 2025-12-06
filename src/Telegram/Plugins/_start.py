@@ -92,30 +92,17 @@ async def handle_verification_code(client: Client, message: Message, code: str) 
         success = database.Users.update_telegram_info(user_id, telegram_data)
         
         if success:
-            # Add the user to sudo users list upon successful Telegram verification
-            try:
-                sudo_users_str = database.Settings.get('sudo_users', str) or ''
-                sudo_users = sudo_users_str.split(',') if sudo_users_str else []
-                
-                # Convert telegram user ID to string for comparison
-                telegram_user_id_str = str(message.from_user.id)
-                
-                # Add user to sudo users if not already present
-                if telegram_user_id_str not in sudo_users:
-                    sudo_users.append(telegram_user_id_str)
-                    database.Settings.set('sudo_users', ','.join(sudo_users))
-                    
-                    # Update client's sudo_users if available
-                    if hasattr(client, 'sudo_users'):
-                        client.sudo_users = sudo_users
-                        
-                    logger.info(f"Added user {user_id} (Telegram ID: {telegram_user_id_str}) to sudo users list")
-                
-                await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server. You've been granted sudo privileges.")
-            except Exception as e:
-                logger.error(f"Error adding user to sudo list: {e}")
-                # Still notify user of successful verification even if sudo addition fails
-                await message.reply("✅ Telegram verification successful! You can now use Telegram features in the file server.")
+            # Notify user of successful verification with enhanced instructions
+            reply_text = (
+                "✅ Telegram verification successful!\n\n"
+                "You can now use Telegram features in the file server.\n\n"
+                "🔧 <b>Next Steps:</b>\n"
+                "1. Visit the web interface to access your files\n"
+                "2. Use /help to see available commands\n"
+                "3. Configure your settings in the Profile section\n\n"
+                "If you experience any issues, contact the administrator."
+            )
+            await message.reply(reply_text)
             
             logger.info(f"Telegram verification successful for user {user_id} (Telegram ID: {message.from_user.id})")
         else:
