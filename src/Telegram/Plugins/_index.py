@@ -407,6 +407,14 @@ async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
         bt.ibutton("❌ Cancel", 'cancel_indexing')
         keyboard = bt.build_menu()
         await callback.message.edit("🚀 Starting indexing process...", reply_markup=keyboard)
+        
+        # Add the chat ID to user data as index_chat_id
+        database.Users.update_one(
+            {"telegram_user_id": str(user_id)},
+            {"$set": {"index_chat_id": callback.message.chat.id}},
+            upsert=True
+        )
+        
         indexer = IndexMessages(callback.message, client, str(callback.from_user.id))
         # await indexer.start()
         asyncio.create_task(indexer.start())
