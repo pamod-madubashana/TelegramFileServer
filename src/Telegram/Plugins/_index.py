@@ -389,10 +389,21 @@ async def index_command(client: Client, message: Message) -> None:
     await message.edit("Indexing panel", reply_markup=InlineKeyboardMarkup(reply_markup))
 
 
-@button(pattern="start_index",CustomFilters=CustomFilters.authorize(sudo=True))
+@button(pattern="start_index")
 async def index_movie_callback(client: Client, callback: CallbackQuery) -> None:
     bt = ButtonMaker()
     try:
+        # Check if user is verified (exists in users list)
+        # Only users added by admin can start indexing
+        user_id = int(callback.from_user.id)
+        user_data = database.Users.getTgUser(user_id)
+        
+        # If user is not in the database, deny access
+        if not user_data:
+            await callback.message.edit("❌ <b>Access Denied</b>\n\nOnly verified users can start indexing. Please contact the administrator to be added to the system.")
+            logger.warning(f"Unauthorized indexing attempt by user {user_id}")
+            return
+            
         bt.ibutton("❌ Cancel", 'cancel_indexing')
         keyboard = bt.build_menu()
         await callback.message.edit("🚀 Starting indexing process...", reply_markup=keyboard)

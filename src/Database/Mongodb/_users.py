@@ -31,7 +31,11 @@ class Users(Collection):
     def getUser(self, user_id: str) -> Any | None:
         try:return self.find_one({"user_id": user_id})
         except:return None
-            
+
+    def getTgUser(self, user_id: str) -> Any | None:
+        try:return self.find_one({"telegram_user_id": user_id})
+        except:return None
+
     def SaveUser(self, user_id: str, password_hash: Optional[str] = None, email: Optional[str] = None) -> InsertOneResult | None:
         try:
             if user_id in self.user_cache:return
