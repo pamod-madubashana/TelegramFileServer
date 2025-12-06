@@ -62,11 +62,11 @@ class IndexMessages:
                 thumbnail = media.file_id # Photo itself is the thumbnail/image
             elif message.voice:
                 file_type = "voice"
-                file_name = "Voice_Note.ogg"
+                file_name = f"Voice_{media.file_unique_id}.ogg"
                 thumbnail = None
             elif message.audio:
                 file_type = "audio"
-                file_name = getattr(media, 'file_name', "N/A")
+                file_name = getattr(media, 'file_name', f"Audio_{media.file_unique_id}.mp3")
                 thumbnail = media.thumbs[0].file_id if media.thumbs else None
             
             # Determine file path based on media type and extension
