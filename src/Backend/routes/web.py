@@ -1294,6 +1294,87 @@ async def change_user_password(request: Request, user_id_param: str, password_re
         logger.error(f"Error changing user password: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+class IndexChatResponse(BaseModel):
+    index_chat_id: Optional[int] = None
+
+
+class UpdateIndexChatRequest(BaseModel):
+    index_chat_id: Optional[int] = None
+
+
+@app.get("/api/user/index-chat", response_model=IndexChatResponse)
+async def get_user_index_chat(request: Request, user_id: str = Depends(require_auth)):
+    """
+    Get the index chat ID for the current user
+    """
+    try:
+        # Get the authenticated user
+        username = request.session.get("username")
+        if not username:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Get user data from database
+        user_data = database.Users.getUser(username)
+        if not user_data:
+            # Create user if not exists
+            database.Users.SaveUser(username)
+            user_data = database.Users.getUser(username)
+        
+        # Get index chat ID from user data
+        index_chat_id = user_data.get("index_chat_id") if user_data else None
+        
+        return IndexChatResponse(index_chat_id=index_chat_id)
+        
+    except Exception as e:
+        logger.error(f"Error fetching user index chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/user/index-chat", response_model=IndexChatResponse)
+async def update_user_index_chat(request: Request, update_request: UpdateIndexChatRequest, user_id: str = Depends(require_auth)):
+    """
+    Update the index chat ID for the current user
+    """
+    try:
+        # Get the authenticated user
+        username = request.session.get("username")
+        if not username:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Update index chat ID in database
+        update_data = {}
+        if update_request.index_chat_id is not None:
+            update_data["index_chat_id"] = update_request.index_chat_id
+        else:
+            # If None, remove the field
+            update_data["$unset"] = {"index_chat_id": ""}
+        
+        # Perform the update
+        if update_data:
+            if "$unset" in update_data:
+                # Handle removal of the field
+                database.Users.update_one(
+                    {"user_id": username},
+                    {"$unset": update_data["$unset"]}
+                )
+            else:
+                # Handle setting the field
+                database.Users.update_one(
+                    {"user_id": username},
+                    {"$set": update_data}
+                )
+        
+        # Get updated user data
+        user_data = database.Users.getUser(username)
+        index_chat_id = user_data.get("index_chat_id") if user_data else None
+        
+        return IndexChatResponse(index_chat_id=index_chat_id)
+        
+    except Exception as e:
+        logger.error(f"Error updating user index chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Add a catch-all route to serve the frontend for client-side routing
 @app.get("/{full_path:path}")
 async def serve_frontend(request: Request, full_path: str):
