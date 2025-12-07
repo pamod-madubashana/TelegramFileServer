@@ -295,8 +295,12 @@ async def upload_file(
     user_id: str = Depends(require_auth)
 ):
     try:
-        # DEBUG: Log the received path
+        # DEBUG: Log the received path and file info
         print(f"Received upload request with path: {path}")
+        print(f"File name: {file.filename}, File size: {file.size}, Content type: {file.content_type}")
+        
+        # Additional debug info for folder uploads
+        print(f"File headers: {getattr(file, 'headers', 'N/A')}")
         # Create the tg_files directory if it doesn't exist
         tg_files_dir = os.path.join(os.getcwd(), "tg_files")
         os.makedirs(tg_files_dir, exist_ok=True)
@@ -304,8 +308,21 @@ async def upload_file(
         # Save the file locally first
         file_path = os.path.join(tg_files_dir, file.filename)
         
+        # Create the directory structure if needed
+        file_dir = os.path.dirname(file_path)
+        if file_dir:
+            os.makedirs(file_dir, exist_ok=True)
+        
         # Write file content asynchronously
         contents = await file.read()
+        
+        # Check if file is truly empty
+        if len(contents) == 0:
+            # Log this but don't necessarily fail - some files might be legitimately 0 bytes
+            logger.warning(f"Received file with 0 bytes: {file.filename}")
+            # For now, we'll still reject 0-byte files as they cause issues with Telegram
+            raise HTTPException(status_code=400, detail="Cannot upload empty files. File may be a placeholder, system file, or directory.")
+        
         async with aiofiles.open(file_path, 'wb') as f:
             await f.write(contents)
         
@@ -314,8 +331,11 @@ async def upload_file(
         print(user_data)
         if not user_data or "index_chat_id" not in user_data:
             # Clean up the temporary file
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
             raise HTTPException(status_code=400, detail="User index chat not found")
         
         chat_id = user_data["index_chat_id"]
@@ -324,15 +344,21 @@ async def upload_file(
         bot_manager = app.state.bot_manager if hasattr(app.state, 'bot_manager') else None
         if not bot_manager:
             # Clean up the temporary file
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
             raise HTTPException(status_code=500, detail="Bot manager not available")
         
         client = bot_manager.get_least_busy_client()
         if not client:
             # Clean up the temporary file
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
             raise HTTPException(status_code=500, detail="No available bot clients")
         
         # Determine file type based on extension
@@ -385,8 +411,11 @@ async def upload_file(
             raise HTTPException(status_code=500, detail="Failed to upload file to Telegram")
         
         # Clean up the temporary file
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
         
         # Get file information
         media = sent_message.document or sent_message.video or sent_message.audio or sent_message.photo or sent_message.voice
@@ -456,8 +485,11 @@ async def upload_file(
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
         # Clean up the temporary file if it exists
-        if 'file_path' in locals() and os.path.exists(file_path):
-            os.remove(file_path)
+        if 'file_path' in locals() and file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Add an OPTIONS endpoint for health check to handle preflight requests
@@ -491,6 +523,9 @@ class CreateFolderRequest(BaseModel):
     folderName: str
     currentPath: str
 
+class CreateFolderPathRequest(BaseModel):
+    fullPath: str
+
 @app.post("/api/folders/create")
 async def create_folder_route(request: CreateFolderRequest, user_id: str = Depends(require_auth)):
     try:
@@ -501,6 +536,18 @@ async def create_folder_route(request: CreateFolderRequest, user_id: str = Depen
             raise HTTPException(status_code=400, detail="Folder already exists")
     except Exception as e:
         logger.error(f"Error creating folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/folders/create-path")
+async def create_folder_path_route(request: CreateFolderPathRequest, user_id: str = Depends(require_auth)):
+    try:
+        success = database.Files.create_folder_path(request.fullPath, user_id)
+        if success:
+            return {"message": f"Folder path '{request.fullPath}' created successfully"}
+        else:
+            return {"message": f"Folder path '{request.fullPath}' already exists or was created"}
+    except Exception as e:
+        logger.error(f"Error creating folder path: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class MoveFileRequest(BaseModel):

@@ -105,6 +105,30 @@ class Files(Collection):
         self.insert_one(folder_doc)
         return True
 
+    def create_folder_path(self, full_path: str, owner_id: str = None):
+        """Recursively create folder structure for a given path"""
+        # Normalize the path
+        full_path = full_path.rstrip('/')
+        if not full_path or full_path == '/':
+            return True
+            
+        # Split path into components
+        path_parts = full_path.lstrip('/').split('/')
+        
+        # Create each folder in the path
+        current_path = "/"
+        for i, folder_name in enumerate(path_parts):
+            if folder_name:  # Skip empty parts
+                # Create the folder
+                success = self.add_folder(folder_name, current_path.rstrip('/'), owner_id)
+                # Update current_path for next iteration
+                if current_path == "/":
+                    current_path = f"/{folder_name}"
+                else:
+                    current_path = f"{current_path}/{folder_name}"
+                    
+        return True
+
     def get_all_files(self, owner_id: str = None):
         # Filter by owner_id if provided
         query = {}
