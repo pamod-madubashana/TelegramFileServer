@@ -58,6 +58,11 @@ A Windows desktop application is available, built with Tauri:
   - Multi-user file access control
   - Settings customization
 
+### Download Links
+
+- [Windows Executable (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/telegram-file-server.exe)
+- [Windows Installer (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_x64-setup.exe)
+
 ## Installation
 
 ### Prerequisites
