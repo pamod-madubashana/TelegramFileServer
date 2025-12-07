@@ -291,11 +291,10 @@ async def health_check():
 @app.post("/api/files/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    path: str = Query(default="/", description="Destination path for the uploaded file"),
+    path: str = Form(default="/", description="Destination path for the uploaded file"),
     user_id: str = Depends(require_auth)
 ):
-    try:
-        # DEBUG: Log the received path and file info
+    try:        # DEBUG: Log the received path and file info
         print(f"Received upload request with path: {path}")
         print(f"File name: {file.filename}, File size: {file.size}, Content type: {file.content_type}")
         # Create the tg_files directory if it doesn't exist
