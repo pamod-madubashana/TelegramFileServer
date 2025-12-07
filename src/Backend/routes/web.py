@@ -298,9 +298,6 @@ async def upload_file(
         # DEBUG: Log the received path and file info
         print(f"Received upload request with path: {path}")
         print(f"File name: {file.filename}, File size: {file.size}, Content type: {file.content_type}")
-        
-        # Additional debug info for folder uploads
-        print(f"File headers: {getattr(file, 'headers', 'N/A')}")
         # Create the tg_files directory if it doesn't exist
         tg_files_dir = os.path.join(os.getcwd(), "tg_files")
         os.makedirs(tg_files_dir, exist_ok=True)
@@ -308,20 +305,12 @@ async def upload_file(
         # Save the file locally first
         file_path = os.path.join(tg_files_dir, file.filename)
         
-        # Create the directory structure if needed
-        file_dir = os.path.dirname(file_path)
-        if file_dir:
-            os.makedirs(file_dir, exist_ok=True)
-        
         # Write file content asynchronously
         contents = await file.read()
         
-        # Check if file is truly empty
+        # Check if file is empty
         if len(contents) == 0:
-            # Log this but don't necessarily fail - some files might be legitimately 0 bytes
-            logger.warning(f"Received file with 0 bytes: {file.filename}")
-            # For now, we'll still reject 0-byte files as they cause issues with Telegram
-            raise HTTPException(status_code=400, detail="Cannot upload empty files. File may be a placeholder, system file, or directory.")
+            raise HTTPException(status_code=400, detail="Cannot upload empty files")
         
         async with aiofiles.open(file_path, 'wb') as f:
             await f.write(contents)

@@ -68,6 +68,13 @@ class Files(Collection):
 
     def add_folder(self, folder_name: str, folder_path: str = "/", owner_id: str = None):
         """Add a folder entry to the database"""
+        # Log the parameters for debugging
+        logger.info(f"add_folder called with folder_name='{folder_name}', folder_path='{folder_path}', owner_id='{owner_id}'")
+        
+        # Ensure folder_path is not empty
+        if not folder_path:
+            folder_path = "/"
+            
         # Check if folder already exists
         query = {"file_name": folder_name, "file_path": folder_path, "file_type": "folder"}
         # Include owner_id in query if provided
@@ -78,6 +85,7 @@ class Files(Collection):
             
         existing = self.find_one(query)
         if existing:
+            logger.info(f"Folder '{folder_name}' already exists at path '{folder_path}'")
             return False
             
         # Generate a unique ID for the folder
@@ -102,30 +110,39 @@ class Files(Collection):
         if owner_id:
             folder_doc["owner_id"] = owner_id
             
+        logger.info(f"Inserting folder document: {folder_doc}")
         self.insert_one(folder_doc)
         return True
 
     def create_folder_path(self, full_path: str, owner_id: str = None):
         """Recursively create folder structure for a given path"""
+        # Log the parameters for debugging
+        logger.info(f"create_folder_path called with full_path='{full_path}', owner_id='{owner_id}'")
+        
         # Normalize the path
         full_path = full_path.rstrip('/')
         if not full_path or full_path == '/':
+            logger.info("Empty or root path, returning True")
             return True
             
         # Split path into components
         path_parts = full_path.lstrip('/').split('/')
+        logger.info(f"Path parts: {path_parts}")
         
         # Create each folder in the path
         current_path = "/"
         for i, folder_name in enumerate(path_parts):
             if folder_name:  # Skip empty parts
-                # Create the folder
-                success = self.add_folder(folder_name, current_path.rstrip('/'), owner_id)
+                logger.info(f"Creating folder '{folder_name}' at path '{current_path}'")
+                # The folder's path should be the parent path, not the current path
+                # For example, for "/qwes", we create folder "qwes" with path "/"
+                success = self.add_folder(folder_name, current_path, owner_id)
                 # Update current_path for next iteration
                 if current_path == "/":
                     current_path = f"/{folder_name}"
                 else:
                     current_path = f"{current_path}/{folder_name}"
+                logger.info(f"Updated current_path to '{current_path}'")
                     
         return True
 
