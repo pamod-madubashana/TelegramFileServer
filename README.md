@@ -63,6 +63,17 @@ A Windows desktop application is available, built with Tauri:
 - [Windows Executable (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/telegram-file-server.exe)
 - [Windows Installer (.exe)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_x64-setup.exe)
 
+## Linux and macOS Desktop Applications
+
+Desktop applications are also available for Linux and macOS, built with Tauri:
+
+### Download Links
+
+- [RPM Package (.rpm)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server-0.1.0-1.x86_64.rpm)
+- [DEB Package (.deb)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_amd64.deb)
+- [AppImage (.AppImage)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_amd64.AppImage)
+- [macOS Disk Image (.dmg)](https://github.com/pamod-madubashana/FileServerApp/releases/latest/download/Telegram.File.Server_0.1.0_aarch64.dmg)
+
 ## Installation
 
 ### Prerequisites
