@@ -30,16 +30,18 @@ async def generate_telegram_verification(
     Generate a Telegram verification code and return the least busy bot link
     """
     try:
-        user_id = verification_request.user_id
         
-        # Generate a unique verification code
-        verification_code = database.Tgcodes.generate_verification_code(user_id)
-        
-        # Get the least busy bot
         bot_manager = request.app.state.bot_manager
         if not bot_manager:
             raise HTTPException(status_code=503, detail="Bot manager not available")
-        
+
+        if request.session.get("authenticated"):
+            username = request.session.get("username")
+            verification_code = database.Tgcodes.generate_verification_code(username)
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+
         # Get clients
         clients = None
         if hasattr(bot_manager, 'clients'):
@@ -75,7 +77,7 @@ async def generate_telegram_verification(
         # Create verification link
         verification_link = f"https://t.me/{bot_me.username}?start={verification_code}"
         
-        logger.info(f"Generated verification link for user {user_id} using bot {bot_me.username}")
+        logger.info(f"Generated verification link for user {username} using bot {bot_me.username}")
         
         return TelegramVerificationResponse(
             bot_username=bot_me.username,
