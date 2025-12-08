@@ -1318,28 +1318,28 @@ async def get_users(request: Request, user_id: str = Depends(require_auth)):
                 id=str(user_doc.get("_id")),
                 username=user_doc.get("user_id", ""),
                 email=user_doc.get("email"),
+                telegram_user_id=user_doc.get("telegram_user_id"),
+                telegram_username=user_doc.get("telegram_username"),
                 permissions=UserPermission(
                     read=user_permissions.get("read", True),
                     write=user_permissions.get("write", False)
                 ),
                 created_at=user_doc.get("created_at", datetime.datetime.now().strftime("%Y-%m-%d")),
                 user_type=user_type
-            ))
-        
+            ))        
         # Add admin user with full details
         admin_user = database.Users.getUser("admin")
         users.insert(0, UserResponse(
             id="1",
             username="admin",
             email=admin_user.get("email") if admin_user else "admin@example.com",
-            telegram_user_id=user_data.get("telegram_user_id"),
-            telegram_username=user_data.get("telegram_username"),
+            telegram_user_id=admin_user.get("telegram_user_id") if admin_user else None,
+            telegram_username=admin_user.get("telegram_username") if admin_user else None,
             permissions=UserPermission(read=True, write=True),
             created_at=admin_user.get("created_at", "2023-01-01") if admin_user else "2023-01-01",
             last_active=admin_user.get("last_active", "2023-12-01") if admin_user else "2023-12-01",
             user_type="local"
-        ))
-        
+        ))        
         return UsersResponse(users=users)
     except HTTPException:
         raise
