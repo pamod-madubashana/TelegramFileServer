@@ -123,7 +123,7 @@ def require_auth(request: Request):
             user_data = database.Users.getUser(username)
             if user_data and user_data.get("telegram_user_id"):
                 return str(user_data.get("telegram_user_id"))
-            return "admin"
+            return
         return username
     
     # Check if authenticated via token (from middleware)

@@ -314,9 +314,19 @@ async def upload_file(
         async with aiofiles.open(file_path, 'wb') as f:
             await f.write(contents)
         
+        # Check if user has verified their Telegram account
+        if not user_id:
+            # Clean up the temporary file
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
+            # Return a specific error that will trigger the frontend to show verification dialog
+            raise HTTPException(status_code=400, detail="TELEGRAM_NOT_VERIFIED: Please verify your Telegram account before uploading files")
+        
         # Get the user's index chat ID
         user_data = database.Users.find_one({"telegram_user_id": int(user_id)})
-        print(user_data)
         if not user_data or "index_chat_id" not in user_data:
             # Clean up the temporary file
             if file_path and os.path.exists(file_path):
@@ -324,8 +334,7 @@ async def upload_file(
                     os.remove(file_path)
                 except Exception as e:
                     logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
-            raise HTTPException(status_code=400, detail="User index chat not found")
-        
+            raise HTTPException(status_code=400, detail="User index chat not found")        
         chat_id = user_data["index_chat_id"]
         
         # Get the bot manager and client
