@@ -297,6 +297,7 @@ async def upload_file(
     try:        # DEBUG: Log the received path and file info
         print(f"Received upload request with path: {path}")
         print(f"File name: {file.filename}, File size: {file.size}, Content type: {file.content_type}")
+        print(f"User ID: {user_id}")
         # Create the tg_files directory if it doesn't exist
         tg_files_dir = os.path.join(os.getcwd(), "tg_files")
         os.makedirs(tg_files_dir, exist_ok=True)
