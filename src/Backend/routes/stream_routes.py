@@ -283,12 +283,24 @@ async def stream_handler(request: Request, file_name: str, auth_token: str = Non
     request.state.is_watch = False
     # Handle download request
     
+    # Add debug logging
+    logger.info(f"DL request received for file: {file_name}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    logger.info(f"Query params: {dict(request.query_params)}")
+    logger.info(f"Session data: {dict(request.session)}")
+    logger.info(f"Request state: {getattr(request.state, '__dict__', {})}")
+    
     # First try to get user from session auth or token auth (handled by middleware)
     user = None
     try:
         user = require_auth(request)
-    except HTTPException:
+        logger.info(f"Authentication successful. User: {user}")
+    except HTTPException as e:
+        logger.error(f"Authentication failed with HTTPException: {e.detail}")
         # If authentication fails, raise 401
+        raise HTTPException(status_code=401, detail="Authentication required")
+    except Exception as e:
+        logger.error(f"Authentication failed with unexpected error: {str(e)}")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     # If we got here, we have a valid user

@@ -120,8 +120,19 @@ def is_admin(request: Request) -> bool:
     return False
 
 def require_auth(request: Request) -> User:
+    # Add debug logging
+    logger.info("require_auth called")
+    logger.info(f"Session data: {dict(request.session)}")
+    logger.info(f"Request state: {getattr(request.state, '__dict__', {})}")
+    logger.info(f"Has authenticated_via_token: {hasattr(request.state, 'authenticated_via_token')}")
+    if hasattr(request.state, 'authenticated_via_token'):
+        logger.info(f"authenticated_via_token: {request.state.authenticated_via_token}")
+    if hasattr(request.state, 'auth_token_data'):
+        logger.info(f"auth_token_data: {request.state.auth_token_data}")
+    
     # Check session first
     if request.session.get("authenticated"):
+        logger.info("User authenticated via session")
         # For local auth, return the username
         username = request.session.get("username")
         # Get user data from database
@@ -137,10 +148,12 @@ def require_auth(request: Request) -> User:
             telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
             telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
         )
+        logger.info(f"User object created from session: {user}")
         return user
     
     # Check if authenticated via token (from middleware)
     if hasattr(request.state, 'authenticated_via_token') and request.state.authenticated_via_token:
+        logger.info("User authenticated via token")
         # Return the username from token data
         token_data = getattr(request.state, 'auth_token_data', {})
         username = token_data.get("username")
@@ -157,8 +170,10 @@ def require_auth(request: Request) -> User:
             telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
             telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
         )
+        logger.info(f"User object created from token: {user}")
         return user
     
+    logger.info("No valid authentication found")
     raise HTTPException(status_code=401, detail="Authentication required")
 
 def require_admin(request: Request):
