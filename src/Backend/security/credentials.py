@@ -7,9 +7,21 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from src.Config import GOOGLE_CLIENT_ID, AUTHORIZED_ADMIN_EMAILS
 from src.Database import database
+from pydantic import BaseModel
+from typing import Optional
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# User class to hold full user information
+class User(BaseModel):
+    username: str
+    email: Optional[str] = None
+    telegram_user_id: Optional[int] = None
+    telegram_username: Optional[str] = None
+    telegram_first_name: Optional[str] = None
+    telegram_last_name: Optional[str] = None
+    telegram_profile_picture: Optional[str] = None
 
 # Admin credentials
 USERNAME = "admin"
@@ -107,43 +119,45 @@ def is_admin(request: Request) -> bool:
     
     return False
 
-def require_auth(request: Request):
+def require_auth(request: Request) -> User:
     # Check session first
     if request.session.get("authenticated"):
         # For local auth, return the username
         username = request.session.get("username")
-        # For Google auth, check if user has Telegram verification
-        if request.session.get("auth_method") == "google":
-            user_data = database.Users.getUser(username)
-            if user_data and user_data.get("telegram_user_id"):
-                return str(user_data.get("telegram_user_id"))
-        # For local auth (admin), return the Telegram user ID if available
-        elif request.session.get("auth_method") == "local":
-            # Check if the admin user has a Telegram user ID
-            user_data = database.Users.getUser(username)
-            if user_data and user_data.get("telegram_user_id"):
-                return str(user_data.get("telegram_user_id"))
-            return
-        return username
+        # Get user data from database
+        user_data = database.Users.getUser(username)
+        
+        # Create User object with all available information
+        user = User(
+            username=username,
+            email=request.session.get("user_email") or (user_data.get("email") if user_data else None),
+            telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
+            telegram_username=user_data.get("telegram_username") if user_data else None,
+            telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
+            telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
+            telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+        )
+        return user
     
     # Check if authenticated via token (from middleware)
     if hasattr(request.state, 'authenticated_via_token') and request.state.authenticated_via_token:
         # Return the username from token data
         token_data = getattr(request.state, 'auth_token_data', {})
         username = token_data.get("username")
-        # For Google auth, check if user has Telegram verification
-        if token_data.get("auth_method") == "google":
-            user_data = database.Users.getUser(username)
-            if user_data and user_data.get("telegram_user_id"):
-                return str(user_data.get("telegram_user_id"))
-        # For local auth (admin), return the Telegram user ID if available
-        elif token_data.get("auth_method") == "local":
-            # Check if the admin user has a Telegram user ID
-            user_data = database.Users.getUser(username)
-            if user_data and user_data.get("telegram_user_id"):
-                return str(user_data.get("telegram_user_id"))
-            return "admin"
-        return username
+        # Get user data from database
+        user_data = database.Users.getUser(username)
+        
+        # Create User object with all available information
+        user = User(
+            username=username,
+            email=token_data.get("user_email") or (user_data.get("email") if user_data else None),
+            telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
+            telegram_username=user_data.get("telegram_username") if user_data else None,
+            telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
+            telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
+            telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+        )
+        return user
     
     raise HTTPException(status_code=401, detail="Authentication required")
 

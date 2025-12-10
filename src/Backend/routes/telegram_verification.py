@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import logging
 import secrets
 
-from src.Backend.security.credentials import require_auth
+from src.Backend.security.credentials import require_auth , User
 from src.Database import database
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class TelegramVerificationResponse(BaseModel):
 async def generate_telegram_verification(
     verification_request: TelegramVerificationRequest,
     request: Request,
-    _: bool = Depends(require_auth)
+    user: User = Depends(require_auth)
 ):
     """
     Generate a Telegram verification code and return the least busy bot link
@@ -94,7 +94,7 @@ async def verify_telegram_code(
     verification_request: TelegramVerificationRequest,
     code: str,
     request: Request,
-    _: bool = Depends(require_auth)
+    user: User = Depends(require_auth)
 ):
     """
     Verify a Telegram code for a user

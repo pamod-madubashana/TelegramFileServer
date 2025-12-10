@@ -28,21 +28,61 @@ class Users(Collection):
         try:return self.count_documents()
         except:return 0
 
-    def getUser(self, user_id: str) -> Any | None:
-        try:return self.find_one({"user_id": user_id})
-        except:return None
-
-    def getTgUser(self, user_id: str) -> Any | None:
-        try:return self.find_one({"telegram_user_id": user_id})
-        except:return None
-
-    def SaveUser(self, user_id: str, password_hash: Optional[str] = None, email: Optional[str] = None) -> InsertOneResult | None:
+    def getUser(self, username: str) -> Any | None:
+        """Get user by username, with backward compatibility for old user_id field"""
         try:
-            if user_id in self.user_cache:return
-            self.user_cache.add(user_id)
-            saved = self.getUser(user_id)
+            # First try to find by username (new structure)
+            user_data = self.find_one({"username": username})
+            
+            # If not found, try to find by user_id (old structure) for backward compatibility
+            if not user_data:
+                user_data = self.find_one({"user_id": username})
+                # If found with old structure, update to new structure
+                if user_data:
+                    # Update the document to use the new structure
+                    self.update_one(
+                        {"_id": user_data["_id"]},
+                        {"$rename": {"user_id": "username"}}
+                    )
+                    # Refresh the user_data with the updated document
+                    user_data = self.find_one({"_id": user_data["_id"]})
+            
+            return user_data
+        except:
+            return None
+
+    def getTgUser(self, telegram_user_id: str) -> Any | None:
+        """Get user by Telegram user ID"""
+        try:return self.find_one({"telegram_user_id": telegram_user_id})
+        except:return None
+
+    def getUserById(self, user_id: str) -> Any | None:
+        """Get user by database user_id"""
+        try:
+            from bson import ObjectId
+            return self.find_one({"_id": ObjectId(user_id)})
+        except:
+            return None
+
+    def SaveUser(self, username: str, user_id: str = None, password_hash: Optional[str] = None, email: Optional[str] = None) -> InsertOneResult | None:
+        """
+        Save a new user to the database
+        If user_id is provided, use it as the database _id, otherwise let MongoDB generate one
+        """
+        try:
+            if username in self.user_cache:return
+            self.user_cache.add(username)
+            
+            # Check if user already exists (with either new or old structure)
+            saved = self.getUser(username)
+            
+            # If user doesn't exist, create new user
             if not saved:
-                user_data = {'user_id': user_id}
+                user_data = {'username': username}
+                # Add user_id if provided
+                if user_id:
+                    from bson import ObjectId
+                    user_data['_id'] = ObjectId(user_id)
                 if password_hash:
                     user_data['password_hash'] = password_hash
                 if email:
@@ -51,41 +91,41 @@ class Users(Collection):
             
         except:return None
         
-    def saveUserSetting(self,user_id,setting :str,value :str) -> None:
+    def saveUserSetting(self, username: str, setting: str, value: str) -> None:
         try:
-            if (self.getUser(user_id)):
-                self.update_one({'user_id':user_id},{"$set": {setting: value}})
+            if (self.getUser(username)):
+                self.update_one({'username': username}, {"$set": {setting: value}})
             else:
-                self.insert_one({'user_id':user_id,setting:value})
+                self.insert_one({'username': username, setting: value})
         except:return None
         
-    def save_password_hash(self, user_id: str, password_hash: str) -> None:
+    def save_password_hash(self, username: str, password_hash: str) -> None:
         """Save user's password hash"""
-        self.saveUserSetting(user_id, 'password_hash', password_hash)
+        self.saveUserSetting(username, 'password_hash', password_hash)
         
-    def save_email(self, user_id: str, email: str) -> None:
+    def save_email(self, username: str, email: str) -> None:
         """Save user's email"""
-        self.saveUserSetting(user_id, 'email', email)
+        self.saveUserSetting(username, 'email', email)
 
-    def getUserSetting(self,user_id :str, setting :str,default :str = None) -> Any | None:
+    def getUserSetting(self, username: str, setting: str, default: str = None) -> Any | None:
         try:
-            if (saved:=self.getUser(user_id)):
+            if (saved := self.getUser(username)):
                 return saved[setting]
             else:
-                self.insert_one({'user_id':user_id,setting:default})
+                self.insert_one({'username': username, setting: default})
         except:return None
         
-    def get_password_hash(self, user_id: str) -> Optional[str]:
+    def get_password_hash(self, username: str) -> Optional[str]:
         """Get user's password hash"""
-        user_data = self.getUser(user_id)
+        user_data = self.getUser(username)
         return user_data.get('password_hash') if user_data else None
         
-    def get_email(self, user_id: str) -> Optional[str]:
+    def get_email(self, username: str) -> Optional[str]:
         """Get user's email"""
-        user_data = self.getUser(user_id)
+        user_data = self.getUser(username)
         return user_data.get('email') if user_data else None
         
-    def update_telegram_info(self, user_id: str, telegram_data: dict) -> bool:
+    def update_telegram_info(self, username: str, telegram_data: dict) -> bool:
         """
         Update user's Telegram information
         """
@@ -100,15 +140,15 @@ class Users(Collection):
             }
             
             result = self.update_one(
-                {'user_id': user_id},
+                {'username': username},
                 {"$set": update_data},
                 upsert=True
             )
             
-            logger.info(f"Updated Telegram info for user {user_id}")
+            logger.info(f"Updated Telegram info for user {username}")
             return result.modified_count > 0 or result.upserted_id is not None
         except Exception as e:
-            logger.error(f"Error updating Telegram info for user {user_id}: {e}")
+            logger.error(f"Error updating Telegram info for user {username}: {e}")
             return False
             
     def get_user_by_telegram_id(self, telegram_user_id: int) -> Optional[dict]:
@@ -123,7 +163,7 @@ class Users(Collection):
             
     def get_user_by_identifier(self, user_identifier: str) -> Optional[dict]:
         """
-        Get a user by either MongoDB _id or user_id
+        Get a user by either database _id, username, or Telegram user ID
         Handle special case for admin user with ID "1"
         """
         try:
@@ -131,17 +171,21 @@ class Users(Collection):
             if user_identifier == "1":
                 return self.getUser("admin")
             
-            # First try to find by user_id (the username/email identifier)
-            user_data = self.find_one({"user_id": user_identifier})
+            # First try to find by username
+            user_data = self.find_one({"username": user_identifier})
             
-            # If that didn't work, try to find by MongoDB _id
+            # If that didn't work, try to find by database _id
             if not user_data:
                 try:
                     from bson import ObjectId
                     user_data = self.find_one({"_id": ObjectId(user_identifier)})
                 except Exception:
-                    # If ObjectId conversion fails, return None
-                    pass
+                    # If ObjectId conversion fails, try Telegram user ID
+                    try:
+                        user_data = self.find_one({"telegram_user_id": int(user_identifier)})
+                    except Exception:
+                        # If all methods fail, return None
+                        pass
             
             return user_data
         except Exception as e:
@@ -150,7 +194,7 @@ class Users(Collection):
             
     def delete_user(self, user_identifier: str) -> bool:
         """
-        Delete a user by either MongoDB _id or user_id
+        Delete a user by either database _id, username, or Telegram user ID
         Handle special case for admin user with ID "1"
         """
         try:
@@ -160,17 +204,21 @@ class Users(Collection):
                 logger.info("Attempt to delete admin user by ID '1' denied")
                 return False
             
-            # First try to delete by user_id (the username/email identifier)
-            result = self.delete_one({"user_id": user_identifier})
+            # First try to delete by username
+            result = self.delete_one({"username": user_identifier})
             
-            # If that didn't work, try to delete by MongoDB _id
+            # If that didn't work, try to delete by database _id
             if result.deleted_count == 0:
                 try:
                     from bson import ObjectId
                     result = self.delete_one({"_id": ObjectId(user_identifier)})
                 except Exception:
-                    # If ObjectId conversion fails, we stick with the previous result
-                    pass
+                    # If ObjectId conversion fails, try Telegram user ID
+                    try:
+                        result = self.delete_one({"telegram_user_id": int(user_identifier)})
+                    except Exception:
+                        # If all methods fail, we stick with the previous result
+                        pass
             
             logger.info(f"Deleted user with identifier {user_identifier}")
             return result.deleted_count > 0
@@ -181,38 +229,52 @@ class Users(Collection):
     def get_all_users(self) -> List[dict]:
         """
         Get all users from the database
+        Migrate old user_id fields to username fields for backward compatibility
         """
         try:
-            return list(self.find())
+            users = list(self.find())
+            
+            # Check if any users still have the old user_id field and migrate them
+            for user in users:
+                if "user_id" in user and "username" not in user:
+                    # Update the document to use the new structure
+                    self.update_one(
+                        {"_id": user["_id"]},
+                        {"$rename": {"user_id": "username"}}
+                    )
+                    # Update the user object in the list
+                    user["username"] = user.pop("user_id")
+            
+            return users
         except Exception as e:
             logger.error(f"Error retrieving all users: {e}")
             return []
             
-    def update_permissions(self, user_id: str, permissions: dict) -> bool:
+    def update_permissions(self, username: str, permissions: dict) -> bool:
         """
         Update user's permissions
         """
         try:
             # Store permissions in the database
             result = self.update_one(
-                {'user_id': user_id},
+                {'username': username},
                 {"$set": {"permissions": permissions}}
             )
-            logger.info(f"Updated permissions for user {user_id}: {permissions}")
+            logger.info(f"Updated permissions for user {username}: {permissions}")
             return result.modified_count > 0
         except Exception as e:
-            logger.error(f"Error updating permissions for user {user_id}: {e}")
+            logger.error(f"Error updating permissions for user {username}: {e}")
             return False
             
-    def get_permissions(self, user_id: str) -> Optional[dict]:
+    def get_permissions(self, username: str) -> Optional[dict]:
         """
         Get user's permissions
         """
         try:
-            user_data = self.getUser(user_id)
+            user_data = self.getUser(username)
             return user_data.get('permissions') if user_data else None
         except Exception as e:
-            logger.error(f"Error retrieving permissions for user {user_id}: {e}")
+            logger.error(f"Error retrieving permissions for user {username}: {e}")
             return None
             
     def verify_user_credentials(self, username: str, password: str) -> bool:
@@ -240,7 +302,7 @@ class Users(Collection):
                     # Save the password hash for future logins
                     password_hash = hashlib.sha256(password.encode()).hexdigest()
                     self.update_one(
-                        {"user_id": username},
+                        {"username": username},
                         {"$set": {"password_hash": password_hash}}
                     )
                     logger.info(f"Saved password hash for user {username}")
@@ -295,7 +357,7 @@ class Users(Collection):
 
     def update_user_by_identifier(self, user_identifier: str, update_data: dict) -> bool:
         """
-        Update a user by either MongoDB _id or user_id
+        Update a user by either database _id, username, or Telegram user ID
         Handle special case for admin user with ID "1"
         """
         try:
@@ -303,17 +365,21 @@ class Users(Collection):
             if user_identifier == "1":
                 user_identifier = "admin"
             
-            # First try to update by user_id (the username/email identifier)
-            result = self.update_one({"user_id": user_identifier}, {"$set": update_data})
+            # First try to update by username
+            result = self.update_one({"username": user_identifier}, {"$set": update_data})
             
-            # If that didn't work, try to update by MongoDB _id
+            # If that didn't work, try to update by database _id
             if result.matched_count == 0:
                 try:
                     from bson import ObjectId
                     result = self.update_one({"_id": ObjectId(user_identifier)}, {"$set": update_data})
                 except Exception:
-                    # If ObjectId conversion fails, we stick with the previous result
-                    pass
+                    # If ObjectId conversion fails, try Telegram user ID
+                    try:
+                        result = self.update_one({"telegram_user_id": int(user_identifier)}, {"$set": update_data})
+                    except Exception:
+                        # If all methods fail, we stick with the previous result
+                        pass
             
             logger.info(f"Updated user with identifier {user_identifier}")
             return result.matched_count > 0

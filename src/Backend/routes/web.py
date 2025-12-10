@@ -23,7 +23,7 @@ import aiofiles
 from d4rk.Logs import setup_logger
 logger = setup_logger("web_server")
 
-from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token, ADMIN_PASSWORD_HASH
+from ..security.credentials import require_auth, is_authenticated, require_admin, verify_credentials, verify_google_token, ADMIN_PASSWORD_HASH , User
 from .api_routes import list_media_api, delete_media_api, update_media_api, delete_movie_quality_api, delete_tv_quality_api, delete_tv_episode_api, delete_tv_season_api
 from .stream_routes import router as stream_router
 # Import the new Telegram verification router
@@ -100,7 +100,7 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:8000", "http://127.0.0.1:8000", "tauri://localhost"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -292,12 +292,12 @@ async def health_check():
 async def upload_file(
     file: UploadFile = File(...),
     path: str = Form(default="/", description="Destination path for the uploaded file"),
-    user_id: str = Depends(require_auth)
+    user: User = Depends(require_auth)
 ):
     try:        # DEBUG: Log the received path and file info
         print(f"Received upload request with path: {path}")
         print(f"File name: {file.filename}, File size: {file.size}, Content type: {file.content_type}")
-        print(f"User ID: {user_id}")
+        print(f"User: {user}")
         # Create the tg_files directory if it doesn't exist
         tg_files_dir = os.path.join(os.getcwd(), "tg_files")
         os.makedirs(tg_files_dir, exist_ok=True)
@@ -316,7 +316,7 @@ async def upload_file(
             await f.write(contents)
         
         # Check if user has verified their Telegram account
-        if not user_id:
+        if not user.telegram_user_id:
             # Clean up the temporary file
             if file_path and os.path.exists(file_path):
                 try:
@@ -327,7 +327,7 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="TELEGRAM_NOT_VERIFIED: Please verify your Telegram account before uploading files")
         
         # Get the user's index chat ID
-        user_data = database.Users.find_one({"telegram_user_id": int(user_id)})
+        user_data = database.Users.find_one({"telegram_user_id": user.telegram_user_id})
         if not user_data or "index_chat_id" not in user_data:
             # Clean up the temporary file
             if file_path and os.path.exists(file_path):
@@ -459,7 +459,7 @@ async def upload_file(
             file_name=file.filename,
             file_caption=f"Uploaded file: {file.filename}",
             file_path=path,  # Use the provided path
-            owner_id=user_id
+            owner_id=str(user.telegram_user_id)
         )
         
         if success:
@@ -499,11 +499,13 @@ async def health_check_options():
 @app.get("/api/files")
 async def get_all_files_route(
     path: str = Query(default="/", description="Folder path to fetch files from"),
-    user_id: str = Depends(require_auth)
+    user: User = Depends(require_auth)
 ):
     try:
         # Fetch files for the specified path and user
-        logger.info(f"Fetching files for path {path} and user_id {user_id}")
+        logger.info(f"Fetching files for path {path} and user {user}")
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         files_data = database.Files.get_files_by_path(path, user_id)
         files_list = []
         for f in files_data:
@@ -525,8 +527,10 @@ class CreateFolderPathRequest(BaseModel):
     fullPath: str
 
 @app.post("/api/folders/create")
-async def create_folder_route(request: CreateFolderRequest, user_id: str = Depends(require_auth)):
+async def create_folder_route(request: CreateFolderRequest, user: User = Depends(require_auth)):
     try:
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         success = database.Files.create_folder(request.folderName, request.currentPath, user_id)
         if success:
             return {"message": f"Folder '{request.folderName}' created successfully"}
@@ -537,8 +541,10 @@ async def create_folder_route(request: CreateFolderRequest, user_id: str = Depen
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/folders/create-path")
-async def create_folder_path_route(request: CreateFolderPathRequest, user_id: str = Depends(require_auth)):
+async def create_folder_path_route(request: CreateFolderPathRequest, user: User = Depends(require_auth)):
     try:
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         success = database.Files.create_folder_path(request.fullPath, user_id)
         if success:
             return {"message": f"Folder path '{request.fullPath}' created successfully"}
@@ -557,7 +563,7 @@ class CopyFileRequest(BaseModel):
     target_path: str
 
 @app.post("/api/files/move")
-async def move_file_route(request: MoveFileRequest, user_id: str = Depends(require_auth)):
+async def move_file_route(request: MoveFileRequest, user: User = Depends(require_auth)):
     try:
         # Check if user owns the file
         if not database.Files.check_file_owner(request.file_id, user_id):
@@ -580,8 +586,10 @@ async def move_file_route(request: MoveFileRequest, user_id: str = Depends(requi
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/files/copy")
-async def copy_file_route(request: CopyFileRequest, user_id: str = Depends(require_auth)):
+async def copy_file_route(request: CopyFileRequest, user: User = Depends(require_auth)):
     try:
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         # Check if user owns the file
         if not database.Files.check_file_owner(request.file_id, user_id):
             raise HTTPException(status_code=403, detail="Access denied")
@@ -618,8 +626,10 @@ class RenameFileRequest(BaseModel):
     new_name: str
 
 @app.post("/api/files/rename")
-async def rename_file_route(request: RenameFileRequest, user_id: str = Depends(require_auth)):
+async def rename_file_route(request: RenameFileRequest, user: User = Depends(require_auth)):
     try:
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         # Rename the file/folder with owner validation
         success = database.Files.rename_file(request.file_id, request.new_name, user_id)
         
@@ -632,8 +642,10 @@ async def rename_file_route(request: RenameFileRequest, user_id: str = Depends(r
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/files/delete")
-async def delete_file_route(request: DeleteFileRequest, user_id: str = Depends(require_auth)):
+async def delete_file_route(request: DeleteFileRequest, user: User = Depends(require_auth)):
     try:
+        # Use the user's Telegram ID as the user identifier
+        user_id = str(user.telegram_user_id) if user.telegram_user_id else user.username
         # Check if user owns the file
         if not database.Files.check_file_owner(request.file_id, user_id):
             raise HTTPException(status_code=403, detail="Access denied")
@@ -677,7 +689,7 @@ async def delete_file_route(request: DeleteFileRequest, user_id: str = Depends(r
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/system/workloads")
-async def get_workloads(_: bool = Depends(require_auth)):
+async def get_workloads(user: User = Depends(require_auth)):
     try:
         return {
             "loads": {
@@ -810,7 +822,7 @@ async def internal_error_handler(request: Request, exc):
 
 # Add new API route for bot information
 @app.get("/api/bots/info")
-async def get_bots_info(_: bool = Depends(require_auth)):
+async def get_bots_info(user: User = Depends(require_auth)):
     try:
         bot_manager = app.state.bot_manager
         if not bot_manager:
@@ -893,7 +905,7 @@ async def get_bots_info(_: bool = Depends(require_auth)):
         return {"bots": [], "logger_bot": None, "workloads": {}, "error": str(e)}
 
 @app.get("/api/bot/{bot_id}/photo")
-async def get_bot_photo(bot_id: int, bot_type: str = "bot", _: bool = Depends(require_auth)):
+async def get_bot_photo(bot_id: int, bot_type: str = "bot", user: User = Depends(require_auth)):
     try:
         bot_manager = app.state.bot_manager
         if not bot_manager:
@@ -1236,32 +1248,27 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 @app.get("/api/user/profile", response_model=UserProfileResponse)
-async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
+async def get_user_profile(request: Request, user: User = Depends(require_auth)):
     """
     Get detailed user profile information including Telegram verification status
     """
     try:
-        # Get the authenticated user
-        username = request.session.get("username")
-        if not username:
-            raise HTTPException(status_code=401, detail="User not authenticated")
-        
         # Get user data from database
-        user_data = database.Users.getUser(username)
+        user_data = database.Users.getUser(user.username)
         if not user_data:
             # Create user if not exists
-            database.Users.SaveUser(username)
-            user_data = database.Users.getUser(username)
+            database.Users.SaveUser(user.username)
+            user_data = database.Users.getUser(user.username)
         
-        # Build response
+        # Build response using the User object directly
         profile = UserProfileResponse(
-            username=username,
-            email=request.session.get("user_email"),
-            telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
-            telegram_username=user_data.get("telegram_username") if user_data else None,
-            telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
-            telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
-            telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+            username=user.username,
+            email=user.email,
+            telegram_user_id=user.telegram_user_id,
+            telegram_username=user.telegram_username,
+            telegram_first_name=user.telegram_first_name,
+            telegram_last_name=user.telegram_last_name,
+            telegram_profile_picture=user.telegram_profile_picture
         )
         
         return profile
@@ -1272,20 +1279,17 @@ async def get_user_profile(request: Request, _: bool = Depends(require_auth)):
 
 
 @app.get("/api/user/is-owner", response_model=IsOwnerResponse)
-async def is_user_owner(request: Request, user_id: str = Depends(require_auth)):
+async def is_user_owner(request: Request, user: User = Depends(require_auth)):
     """
     Check if the current user is the owner (defined in OWNER env variable)
     """
     try:
-        # Get user data from database
-        user_data = database.Users.getUser(request.session.get("username"))
-        
         # Check if user has telegram_user_id and if it matches OWNER
         is_owner = False
         owner_telegram_id = None
         
-        if OWNER is not None and user_data and user_data.get("telegram_user_id"):
-            is_owner = int(user_data.get("telegram_user_id")) == OWNER
+        if OWNER is not None and user.telegram_user_id:
+            is_owner = user.telegram_user_id == OWNER
             owner_telegram_id = OWNER
         
         return IsOwnerResponse(is_owner=is_owner, owner_telegram_id=owner_telegram_id)
@@ -1295,14 +1299,13 @@ async def is_user_owner(request: Request, user_id: str = Depends(require_auth)):
 
 
 @app.get("/api/users", response_model=UsersResponse)
-async def get_users(request: Request, user_id: str = Depends(require_auth)):
+async def get_users(request: Request, user: User = Depends(require_auth)):
     """
     Get all users (owner only)
     """
     try:
         # Check if user is owner
-        user_data = database.Users.getUser(request.session.get("username"))
-        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+        if not user.telegram_user_id or user.telegram_user_id != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get all users from database
@@ -1314,19 +1317,19 @@ async def get_users(request: Request, user_id: str = Depends(require_auth)):
         # Process each user
         for user_doc in all_users:
             # Skip admin user as we'll add it separately with full details
-            if user_doc.get("user_id") == "admin":
+            if user_doc.get("username") == "admin":
                 continue
                 
             # Get user permissions
             user_permissions = user_doc.get("permissions", {})
             
             # Determine user type
-            user_type = "local" if (user_doc.get("user_id") and not user_doc.get("user_id").startswith("google_")) else "google"
+            user_type = "local" if (user_doc.get("username") and not user_doc.get("username").startswith("google_")) else "google"
             
             # Add user to the list
             users.append(UserResponse(
                 id=str(user_doc.get("_id")),
-                username=user_doc.get("user_id", ""),
+                username=user_doc.get("username", ""),
                 email=user_doc.get("email"),
                 telegram_user_id=user_doc.get("telegram_user_id"),
                 telegram_username=user_doc.get("telegram_username"),
@@ -1359,14 +1362,13 @@ async def get_users(request: Request, user_id: str = Depends(require_auth)):
 
 
 @app.post("/api/users", response_model=UserResponse)
-async def add_user(request: Request, user_request: AddUserRequest, user_id: str = Depends(require_auth)):
+async def add_user(request: Request, user_request: AddUserRequest, user: User = Depends(require_auth)):
     """
     Add a new user (owner only)
     """
     try:
         # Check if user is owner
-        user_data = database.Users.getUser(request.session.get("username"))
-        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+        if not user.telegram_user_id or user.telegram_user_id != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Validate input based on user type
@@ -1391,7 +1393,7 @@ async def add_user(request: Request, user_request: AddUserRequest, user_id: str 
             # Look for existing Google user with this email
             all_users = database.Users.get_all_users()
             for user in all_users:
-                if user.get("user_id", "").startswith("google_") and user.get("email") == user_request.email:
+                if user.get("username", "").startswith("google_") and user.get("email") == user_request.email:
                     existing_user = user
                     break
         
@@ -1406,7 +1408,7 @@ async def add_user(request: Request, user_request: AddUserRequest, user_id: str 
         # Save user to database
         user_id_for_db = user_request.username if user_request.username else f"google_{user_request.email}"
         save_result = database.Users.SaveUser(
-            user_id=user_id_for_db,
+            username=user_id_for_db,
             password_hash=password_hash,
             email=user_request.email
         )
@@ -1440,14 +1442,13 @@ async def add_user(request: Request, user_request: AddUserRequest, user_id: str 
 
 
 @app.put("/api/users/{user_id_param}", response_model=UserResponse)
-async def update_user(request: Request, user_id_param: str, user_request: UpdateUserRequest, user_id: str = Depends(require_auth)):
+async def update_user(request: Request, user_id_param: str, user_request: UpdateUserRequest, user: User = Depends(require_auth)):
     """
     Update a user (owner only)
     """
     try:
         # Check if user is owner
-        user_data = database.Users.getUser(request.session.get("username"))
-        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+        if not user.telegram_user_id or user.telegram_user_id != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get current user data by identifier
@@ -1473,17 +1474,17 @@ async def update_user(request: Request, user_id_param: str, user_request: Update
             "read": user_request.permissions.read,
             "write": user_request.permissions.write
         }
-        database.Users.update_permissions(current_user.get("user_id"), permissions_dict)
+        database.Users.update_permissions(current_user.get("username"), permissions_dict)
         
         # Get updated user data
         updated_user_data = database.Users.get_user_by_identifier(user_id_param)
         
         # Determine user type based on whether username exists
-        user_type = "local" if (updated_user_data and updated_user_data.get("user_id") and not updated_user_data.get("user_id").startswith("google_")) else "google"
+        user_type = "local" if (updated_user_data and updated_user_data.get("username") and not updated_user_data.get("username").startswith("google_")) else "google"
         
         updated_user = UserResponse(
             id=user_id_param,
-            username=updated_user_data.get("user_id", "Unknown") if updated_user_data else "Unknown",
+            username=updated_user_data.get("username", "Unknown") if updated_user_data else "Unknown",
             email=user_request.email or (updated_user_data.get("email") if updated_user_data else None),
             permissions=UserPermission(
                 read=user_request.permissions.read,
@@ -1503,14 +1504,13 @@ async def update_user(request: Request, user_id_param: str, user_request: Update
 
 
 @app.delete("/api/users/{user_id_param}")
-async def delete_user(request: Request, user_id_param: str, user_id: str = Depends(require_auth)):
+async def delete_user(request: Request, user_id_param: str, user: User = Depends(require_auth)):
     """
     Delete a user (owner only)
     """
     try:
         # Check if user is owner
-        user_data = database.Users.getUser(request.session.get("username"))
-        if not user_data or not user_data.get("telegram_user_id") or int(user_data.get("telegram_user_id")) != OWNER:
+        if not user.telegram_user_id or user.telegram_user_id != OWNER:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Prevent deleting admin user
@@ -1537,7 +1537,7 @@ async def delete_user(request: Request, user_id_param: str, user_id: str = Depen
 
 
 @app.put("/api/users/{user_id_param}/password")
-async def change_user_password(request: Request, user_id_param: str, password_request: ChangePasswordRequest, user_id: str = Depends(require_auth)):
+async def change_user_password(request: Request, user_id_param: str, password_request: ChangePasswordRequest, user: User = Depends(require_auth)):
     """
     Change a user's password (owner only or user themselves)
     """
@@ -1567,7 +1567,7 @@ async def change_user_password(request: Request, user_id_param: str, password_re
             raise HTTPException(status_code=404, detail="User not found")
         
         # Allow if user is owner or if user is changing their own password
-        target_username = target_user.get("user_id")
+        target_username = target_user.get("username")
         is_self = target_username == request.session.get("username")
         logger.info(f"Target username: {target_username}, Is self: {is_self}")
         
@@ -1616,22 +1616,17 @@ class UpdateIndexChatRequest(BaseModel):
 
 
 @app.get("/api/user/index-chat", response_model=IndexChatResponse)
-async def get_user_index_chat(request: Request, user_id: str = Depends(require_auth)):
+async def get_user_index_chat(request: Request, user: User = Depends(require_auth)):
     """
     Get the index chat ID for the current user
     """
     try:
-        # Get the authenticated user
-        username = request.session.get("username")
-        if not username:
-            raise HTTPException(status_code=401, detail="User not authenticated")
-        
         # Get user data from database
-        user_data = database.Users.getUser(username)
+        user_data = database.Users.getUser(user.username)
         if not user_data:
             # Create user if not exists
-            database.Users.SaveUser(username)
-            user_data = database.Users.getUser(username)
+            database.Users.SaveUser(user.username)
+            user_data = database.Users.getUser(user.username)
         
         # Get index chat ID from user data
         index_chat_id = user_data.get("index_chat_id") if user_data else None
@@ -1644,16 +1639,11 @@ async def get_user_index_chat(request: Request, user_id: str = Depends(require_a
 
 
 @app.put("/api/user/index-chat", response_model=IndexChatResponse)
-async def update_user_index_chat(request: Request, update_request: UpdateIndexChatRequest, user_id: str = Depends(require_auth)):
+async def update_user_index_chat(request: Request, update_request: UpdateIndexChatRequest, user: User = Depends(require_auth)):
     """
     Update the index chat ID for the current user
     """
     try:
-        # Get the authenticated user
-        username = request.session.get("username")
-        if not username:
-            raise HTTPException(status_code=401, detail="User not authenticated")
-        
         # Update index chat ID in database
         update_data = {}
         if update_request.index_chat_id is not None:
@@ -1667,18 +1657,18 @@ async def update_user_index_chat(request: Request, update_request: UpdateIndexCh
             if "$unset" in update_data:
                 # Handle removal of the field
                 database.Users.update_one(
-                    {"user_id": username},
+                    {"username": user.username},
                     {"$unset": update_data["$unset"]}
                 )
             else:
                 # Handle setting the field
                 database.Users.update_one(
-                    {"user_id": username},
+                    {"username": user.username},
                     {"$set": update_data}
                 )
         
         # Get updated user data
-        user_data = database.Users.getUser(username)
+        user_data = database.Users.getUser(user.username)
         index_chat_id = user_data.get("index_chat_id") if user_data else None
         
         return IndexChatResponse(index_chat_id=index_chat_id)
