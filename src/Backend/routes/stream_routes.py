@@ -291,48 +291,57 @@ async def stream_handler(request: Request, file_name: str, auth_token: str = Non
         # If session auth fails, we'll try token auth below
         pass
     
-    # If we don't have a user from session auth, check for auth_token in query params (for Tauri/desktop apps)
-    if not user and auth_token:
-        # Check if the token exists in our token store
-        from .web import _auth_tokens
-        token_data = None
+    # If we don't have a user from session auth, check for auth_token in query params or headers (for Tauri/desktop apps)
+    if not user:
+        # Check for auth_token in query params first
+        if not auth_token:
+            auth_token = request.query_params.get("auth_token")
         
-        # First check in-memory cache
-        if auth_token in _auth_tokens:
-            token_data = _auth_tokens[auth_token]
-        else:
-            # Check in database if not found in memory
-            try:
-                db_token_data = database.Users.get_auth_token(auth_token)
-                if db_token_data:
-                    # Add to in-memory cache for future requests
-                    _auth_tokens[auth_token] = {
-                        "authenticated": True,
-                        "username": db_token_data['username'],
-                        "auth_method": db_token_data['auth_method'],
-                        "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
-                    }
-                    token_data = _auth_tokens[auth_token]
-            except Exception as e:
-                logger.error(f"Failed to check auth token in database: {e}")
+        # If still no auth_token, check for X-Auth-Token header
+        if not auth_token:
+            auth_token = request.headers.get("X-Auth-Token")
         
-        # If we found token data, create a User object
-        if token_data:
-            # Get user data from database
-            username = token_data.get("username")
-            user_data = database.Users.getUser(username)
+        if auth_token:
+            # Check if the token exists in our token store
+            from .web import _auth_tokens
+            token_data = None
             
-            # Create User object with all available information
-            from src.Backend.security.credentials import User
-            user = User(
-                username=username,
-                email=token_data.get("user_email") or (user_data.get("email") if user_data else None),
-                telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
-                telegram_username=user_data.get("telegram_username") if user_data else None,
-                telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
-                telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
-                telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
-            )
+            # First check in-memory cache
+            if auth_token in _auth_tokens:
+                token_data = _auth_tokens[auth_token]
+            else:
+                # Check in database if not found in memory
+                try:
+                    db_token_data = database.Users.get_auth_token(auth_token)
+                    if db_token_data:
+                        # Add to in-memory cache for future requests
+                        _auth_tokens[auth_token] = {
+                            "authenticated": True,
+                            "username": db_token_data['username'],
+                            "auth_method": db_token_data['auth_method'],
+                            "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                        }
+                        token_data = _auth_tokens[auth_token]
+                except Exception as e:
+                    logger.error(f"Failed to check auth token in database: {e}")
+            
+            # If we found token data, create a User object
+            if token_data:
+                # Get user data from database
+                username = token_data.get("username")
+                user_data = database.Users.getUser(username)
+                
+                # Create User object with all available information
+                from src.Backend.security.credentials import User
+                user = User(
+                    username=username,
+                    email=token_data.get("user_email") or (user_data.get("email") if user_data else None),
+                    telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
+                    telegram_username=user_data.get("telegram_username") if user_data else None,
+                    telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
+                    telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
+                    telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+                )
     
     # If still no valid authentication, raise 401
     if not user:
@@ -563,48 +572,57 @@ async def watch_handler(request: Request, file_name: str, auth_token: str = None
         # If session auth fails, we'll try token auth below
         pass
     
-    # If we don't have a user from session auth, check for auth_token in query params (for Tauri/desktop apps)
-    if not user and auth_token:
-        # Check if the token exists in our token store
-        from .web import _auth_tokens
-        token_data = None
+    # If we don't have a user from session auth, check for auth_token in query params or headers (for Tauri/desktop apps)
+    if not user:
+        # Check for auth_token in query params first
+        if not auth_token:
+            auth_token = request.query_params.get("auth_token")
         
-        # First check in-memory cache
-        if auth_token in _auth_tokens:
-            token_data = _auth_tokens[auth_token]
-        else:
-            # Check in database if not found in memory
-            try:
-                db_token_data = database.Users.get_auth_token(auth_token)
-                if db_token_data:
-                    # Add to in-memory cache for future requests
-                    _auth_tokens[auth_token] = {
-                        "authenticated": True,
-                        "username": db_token_data['username'],
-                        "auth_method": db_token_data['auth_method'],
-                        "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
-                    }
-                    token_data = _auth_tokens[auth_token]
-            except Exception as e:
-                logger.error(f"Failed to check auth token in database: {e}")
+        # If still no auth_token, check for X-Auth-Token header
+        if not auth_token:
+            auth_token = request.headers.get("X-Auth-Token")
         
-        # If we found token data, create a User object
-        if token_data:
-            # Get user data from database
-            username = token_data.get("username")
-            user_data = database.Users.getUser(username)
+        if auth_token:
+            # Check if the token exists in our token store
+            from .web import _auth_tokens
+            token_data = None
             
-            # Create User object with all available information
-            from src.Backend.security.credentials import User
-            user = User(
-                username=username,
-                email=token_data.get("user_email") or (user_data.get("email") if user_data else None),
-                telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
-                telegram_username=user_data.get("telegram_username") if user_data else None,
-                telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
-                telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
-                telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
-            )
+            # First check in-memory cache
+            if auth_token in _auth_tokens:
+                token_data = _auth_tokens[auth_token]
+            else:
+                # Check in database if not found in memory
+                try:
+                    db_token_data = database.Users.get_auth_token(auth_token)
+                    if db_token_data:
+                        # Add to in-memory cache for future requests
+                        _auth_tokens[auth_token] = {
+                            "authenticated": True,
+                            "username": db_token_data['username'],
+                            "auth_method": db_token_data['auth_method'],
+                            "created_at": db_token_data['created_at'].isoformat() if hasattr(db_token_data['created_at'], 'isoformat') else str(db_token_data['created_at'])
+                        }
+                        token_data = _auth_tokens[auth_token]
+                except Exception as e:
+                    logger.error(f"Failed to check auth token in database: {e}")
+            
+            # If we found token data, create a User object
+            if token_data:
+                # Get user data from database
+                username = token_data.get("username")
+                user_data = database.Users.getUser(username)
+                
+                # Create User object with all available information
+                from src.Backend.security.credentials import User
+                user = User(
+                    username=username,
+                    email=token_data.get("user_email") or (user_data.get("email") if user_data else None),
+                    telegram_user_id=user_data.get("telegram_user_id") if user_data else None,
+                    telegram_username=user_data.get("telegram_username") if user_data else None,
+                    telegram_first_name=user_data.get("telegram_first_name") if user_data else None,
+                    telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
+                    telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
+                )
     
     # If still no valid authentication, raise 401
     if not user:
@@ -673,9 +691,15 @@ async def watch_quality_handler(request: Request, id: str, quality: str):
         # If session auth fails, we'll try token auth below
         pass
     
-    # If we don't have a user from session auth, check for auth_token in query params (for Tauri/desktop apps)
+    # If we don't have a user from session auth, check for auth_token in query params or headers (for Tauri/desktop apps)
     if not user:
+        # Check for auth_token in query params first
         auth_token = request.query_params.get("auth_token")
+        
+        # If still no auth_token, check for X-Auth-Token header
+        if not auth_token:
+            auth_token = request.headers.get("X-Auth-Token")
+        
         if auth_token:
             # Check if the token exists in our token store
             from .web import _auth_tokens
