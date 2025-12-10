@@ -80,10 +80,6 @@ app = FastAPI(
 async def startup_event():
     load_persistent_tokens(app)
 
-# Include stream routes
-app.include_router(stream_router)
-# Include Telegram verification routes
-app.include_router(telegram_router)
 
 # --- Middleware Setup ---
 # Configure session middleware to work with both browsers and Tauri WebView
@@ -135,6 +131,11 @@ async def auth_token_middleware(request: Request, call_next):
                 request.state.authenticated_via_token = True
                 logger.debug(f"Authenticated via auth token (database) for user: {db_token_data['username']}")
     return await call_next(request)
+
+# Include stream routes AFTER middleware setup
+app.include_router(stream_router)
+# Include Telegram verification routes
+app.include_router(telegram_router)
 
 # --- Add logging middleware ---
 @app.middleware("http")
