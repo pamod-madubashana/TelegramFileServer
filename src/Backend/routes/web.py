@@ -79,6 +79,23 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     load_persistent_tokens(app)
+    
+    # Ensure admin user has telegram_user_id set to match OWNER env var
+    if OWNER is not None:
+        try:
+            admin_user = database.Users.getUser("admin")
+            if not admin_user or admin_user.get("telegram_user_id") != OWNER:
+                # Update admin user with OWNER Telegram ID
+                telegram_data = {
+                    "telegram_user_id": OWNER
+                }
+                success = database.Users.update_telegram_info("admin", telegram_data)
+                if success:
+                    logger.info(f"Updated admin user with OWNER Telegram ID: {OWNER}")
+                else:
+                    logger.error("Failed to update admin user with OWNER Telegram ID")
+        except Exception as e:
+            logger.error(f"Error ensuring admin user has correct Telegram ID: {e}")
 
 
 # --- Middleware Setup ---
@@ -1288,9 +1305,13 @@ async def is_user_owner(request: Request, user: User = Depends(require_auth)):
         is_owner = False
         owner_telegram_id = None
         
-        if OWNER is not None and user.telegram_user_id:
-            is_owner = user.telegram_user_id == OWNER
+        if OWNER is not None:
             owner_telegram_id = OWNER
+            # Special case for admin user - check if username is 'admin'
+            if user.username == "admin":
+                is_owner = True
+            elif user.telegram_user_id:
+                is_owner = user.telegram_user_id == OWNER
         
         return IsOwnerResponse(is_owner=is_owner, owner_telegram_id=owner_telegram_id)
     except Exception as e:
@@ -1305,7 +1326,15 @@ async def get_users(request: Request, user: User = Depends(require_auth)):
     """
     try:
         # Check if user is owner
-        if not user.telegram_user_id or user.telegram_user_id != OWNER:
+        is_owner = False
+        if user.username == "admin":
+            # Admin user is always considered owner
+            is_owner = True
+        elif user.telegram_user_id and OWNER is not None:
+            # Check if telegram_user_id matches OWNER
+            is_owner = user.telegram_user_id == OWNER
+        
+        if not is_owner:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get all users from database
@@ -1368,7 +1397,15 @@ async def add_user(request: Request, user_request: AddUserRequest, user: User = 
     """
     try:
         # Check if user is owner
-        if not user.telegram_user_id or user.telegram_user_id != OWNER:
+        is_owner = False
+        if user.username == "admin":
+            # Admin user is always considered owner
+            is_owner = True
+        elif user.telegram_user_id and OWNER is not None:
+            # Check if telegram_user_id matches OWNER
+            is_owner = user.telegram_user_id == OWNER
+        
+        if not is_owner:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Validate input based on user type
@@ -1448,7 +1485,15 @@ async def update_user(request: Request, user_id_param: str, user_request: Update
     """
     try:
         # Check if user is owner
-        if not user.telegram_user_id or user.telegram_user_id != OWNER:
+        is_owner = False
+        if user.username == "admin":
+            # Admin user is always considered owner
+            is_owner = True
+        elif user.telegram_user_id and OWNER is not None:
+            # Check if telegram_user_id matches OWNER
+            is_owner = user.telegram_user_id == OWNER
+        
+        if not is_owner:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Get current user data by identifier
@@ -1510,7 +1555,15 @@ async def delete_user(request: Request, user_id_param: str, user: User = Depends
     """
     try:
         # Check if user is owner
-        if not user.telegram_user_id or user.telegram_user_id != OWNER:
+        is_owner = False
+        if user.username == "admin":
+            # Admin user is always considered owner
+            is_owner = True
+        elif user.telegram_user_id and OWNER is not None:
+            # Check if telegram_user_id matches OWNER
+            is_owner = user.telegram_user_id == OWNER
+        
+        if not is_owner:
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Prevent deleting admin user
@@ -1549,8 +1602,14 @@ async def change_user_password(request: Request, user_id_param: str, password_re
         logger.info(f"Current user data: {current_user_data}")
         
         # Check if user is owner or trying to change their own password
-        is_owner = (current_user_data and current_user_data.get("telegram_user_id") and 
-                   int(current_user_data.get("telegram_user_id")) == OWNER)
+        is_owner = False
+        if current_user_data:
+            if current_user_data.get("username") == "admin":
+                # Admin user is always considered owner
+                is_owner = True
+            elif current_user_data.get("telegram_user_id") and OWNER is not None:
+                # Check if telegram_user_id matches OWNER
+                is_owner = int(current_user_data.get("telegram_user_id")) == OWNER
         logger.info(f"Is owner: {is_owner}")
         
         # Handle special case for admin user with ID "1"
