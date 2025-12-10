@@ -278,7 +278,7 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
 
 @router.get("/dl/{file_name:path}")
 @router.head("/dl/{file_name:path}")
-async def stream_handler(request: Request, file_name: str, auth_token: str = None):
+async def stream_handler(request: Request, file_name: str):
     # For download, explicitly set is_watch to False
     request.state.is_watch = False
     # Handle download request
@@ -503,7 +503,7 @@ async def stream_handler_for_watch(request: Request, id: str, filename: str = No
 
 
 @router.get("/watch/{file_name:path}")
-async def watch_handler(request: Request, file_name: str, auth_token: str = None):
+async def watch_handler(request: Request, file_name: str):
     # Check if this is a request for the video content (not the player page)
     # We can detect this by checking if the Accept header contains video/ but NOT text/html
     # This prevents browsers from accidentally triggering streaming when they want the player page
@@ -529,12 +529,12 @@ async def watch_handler(request: Request, file_name: str, auth_token: str = None
     if "video/" in accept_header and "text/html" not in accept_header:
         # This is a request for the video content, stream it
         request.state.is_watch = True
-        return await stream_handler(request, file_name, auth_token)
+        return await stream_handler(request, file_name)
     # Also check for direct range requests which are typically video streaming requests
     elif request.headers.get("Range"):
         # This is a range request, definitely a streaming request
         request.state.is_watch = True
-        return await stream_handler(request, file_name, auth_token)
+        return await stream_handler(request, file_name)
     else:
         # This is a request for the video player page
         # Look up the file in the database using the file name
