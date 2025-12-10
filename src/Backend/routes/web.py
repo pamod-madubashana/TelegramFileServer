@@ -106,12 +106,7 @@ app.add_middleware(
 @app.middleware("http")
 async def auth_token_middleware(request: Request, call_next):
     """Handle token-based authentication for Tauri/desktop apps"""
-    logger.info(f"Auth token middleware called for {request.method} {request.url}")
     auth_header = request.headers.get("X-Auth-Token")
-    logger.info(f"X-Auth-Token header: {auth_header}")
-    
-    # Log current auth tokens for debugging
-    logger.info(f"Current auth tokens in memory: {list(_auth_tokens.keys())}")
     if auth_header:
         # First check in-memory cache
         if auth_header in _auth_tokens:
@@ -119,7 +114,6 @@ async def auth_token_middleware(request: Request, call_next):
             # Add token data to session-like storage for the route handlers
             request.state.auth_token_data = token_data
             request.state.authenticated_via_token = True
-            logger.info(f"Authenticated via auth token (cache) for user: {token_data.get('username')}")
         else:
             # Check in database if not found in memory
             db_token_data = database.Users.get_auth_token(auth_header)
@@ -134,10 +128,7 @@ async def auth_token_middleware(request: Request, call_next):
                 # Add token data to session-like storage for the route handlers
                 request.state.auth_token_data = _auth_tokens[auth_header]
                 request.state.authenticated_via_token = True
-                logger.info(f"Authenticated via auth token (database) for user: {db_token_data['username']}")
-    logger.info("Calling next middleware/handler")
     response = await call_next(request)
-    logger.info("Completed middleware/handler processing")
     return response
 
 # Include stream routes AFTER middleware setup
