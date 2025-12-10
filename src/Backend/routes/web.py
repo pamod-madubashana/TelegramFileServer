@@ -1301,6 +1301,9 @@ async def is_user_owner(request: Request, user: User = Depends(require_auth)):
     Check if the current user is the owner (defined in OWNER env variable)
     """
     try:
+        logger.info(f"Checking owner status for user: username={user.username}, telegram_user_id={user.telegram_user_id}")
+        logger.info(f"OWNER environment variable: {OWNER}")
+        
         # Check if user has telegram_user_id and if it matches OWNER
         is_owner = False
         owner_telegram_id = None
@@ -1310,12 +1313,19 @@ async def is_user_owner(request: Request, user: User = Depends(require_auth)):
             # Special case for admin user - check if username is 'admin'
             if user.username == "admin":
                 is_owner = True
+                logger.info("User is admin, granting owner status")
             elif user.telegram_user_id:
                 is_owner = user.telegram_user_id == OWNER
+                logger.info(f"Telegram ID check: {user.telegram_user_id} == {OWNER} = {is_owner}")
+            else:
+                logger.info("User has no telegram_user_id")
+        else:
+            logger.info("OWNER environment variable not set")
         
+        logger.info(f"Final owner status: is_owner={is_owner}")
         return IsOwnerResponse(is_owner=is_owner, owner_telegram_id=owner_telegram_id)
     except Exception as e:
-        logger.error(f"Error checking owner status: {e}")
+        logger.error(f"Error checking owner status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
