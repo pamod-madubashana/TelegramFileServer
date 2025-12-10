@@ -114,7 +114,7 @@ async def auth_token_middleware(request: Request, call_next):
             # Add token data to session-like storage for the route handlers
             request.state.auth_token_data = token_data
             request.state.authenticated_via_token = True
-            logger.debug(f"Authenticated via auth token (cache) for user: {token_data.get('username')}")
+            logger.info(f"Authenticated via auth token (cache) for user: {token_data.get('username')}")
         else:
             # Check in database if not found in memory
             db_token_data = database.Users.get_auth_token(auth_header)
@@ -129,8 +129,11 @@ async def auth_token_middleware(request: Request, call_next):
                 # Add token data to session-like storage for the route handlers
                 request.state.auth_token_data = _auth_tokens[auth_header]
                 request.state.authenticated_via_token = True
-                logger.debug(f"Authenticated via auth token (database) for user: {db_token_data['username']}")
-    return await call_next(request)
+                logger.info(f"Authenticated via auth token (database) for user: {db_token_data['username']}")
+    logger.info("Calling next middleware/handler")
+    response = await call_next(request)
+    logger.info("Completed middleware/handler processing")
+    return response
 
 # Include stream routes AFTER middleware setup
 app.include_router(stream_router)
