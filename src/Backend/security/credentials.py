@@ -120,18 +120,12 @@ def is_admin(request: Request) -> bool:
     return False
 
 def require_auth(request: Request) -> User:
-    logger.info(f"require_auth called. Session: {dict(request.session)}")
-    logger.info(f"Request state attributes: {dir(request.state) if hasattr(request.state, '__dict__') else 'No __dict__'}")
-    logger.info(f"Request state __dict__: {getattr(request.state, '__dict__', 'No __dict__')}")
-    
     # Check session first
     if request.session.get("authenticated"):
-        logger.info("Authenticated via session")
         # For local auth, return the username
         username = request.session.get("username")
         # Get user data from database
         user_data = database.Users.getUser(username)
-        logger.info(f"User data from database: {user_data}")
         
         # Create User object with all available information
         user = User(
@@ -143,23 +137,15 @@ def require_auth(request: Request) -> User:
             telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
             telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
         )
-        logger.info(f"Created user object: {user}")
         return user
     
     # Check if authenticated via token (from middleware)
-    logger.info(f"Checking for token authentication. hasattr authenticated_via_token: {hasattr(request.state, 'authenticated_via_token')}")
-    if hasattr(request.state, 'authenticated_via_token'):
-        logger.info(f"authenticated_via_token value: {request.state.authenticated_via_token}")
-    
     if hasattr(request.state, 'authenticated_via_token') and request.state.authenticated_via_token:
-        logger.info("Authenticated via token")
         # Return the username from token data
         token_data = getattr(request.state, 'auth_token_data', {})
-        logger.info(f"Token data: {token_data}")
         username = token_data.get("username")
         # Get user data from database
         user_data = database.Users.getUser(username)
-        logger.info(f"User data from database: {user_data}")
         
         # Create User object with all available information
         user = User(
@@ -171,10 +157,8 @@ def require_auth(request: Request) -> User:
             telegram_last_name=user_data.get("telegram_last_name") if user_data else None,
             telegram_profile_picture=user_data.get("telegram_profile_picture") if user_data else None
         )
-        logger.info(f"Created user object: {user}")
         return user
     
-    logger.info("No authentication found, raising HTTPException")
     raise HTTPException(status_code=401, detail="Authentication required")
 
 def require_admin(request: Request):
