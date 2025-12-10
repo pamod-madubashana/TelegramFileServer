@@ -106,7 +106,12 @@ app.add_middleware(
 @app.middleware("http")
 async def auth_token_middleware(request: Request, call_next):
     """Handle token-based authentication for Tauri/desktop apps"""
+    logger.info(f"Auth token middleware called for {request.method} {request.url}")
     auth_header = request.headers.get("X-Auth-Token")
+    logger.info(f"X-Auth-Token header: {auth_header}")
+    
+    # Log current auth tokens for debugging
+    logger.info(f"Current auth tokens in memory: {list(_auth_tokens.keys())}")
     if auth_header:
         # First check in-memory cache
         if auth_header in _auth_tokens:

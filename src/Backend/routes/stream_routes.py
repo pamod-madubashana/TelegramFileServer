@@ -283,12 +283,21 @@ async def stream_handler(request: Request, file_name: str, auth_token: str = Non
     request.state.is_watch = False
     # Handle download request
     
-    # Add debug logging
+    # Add comprehensive debug logging
     logger.info(f"DL request received for file: {file_name}")
+    logger.info(f"Request method: {request.method}")
+    logger.info(f"Request URL: {request.url}")
     logger.info(f"Request headers: {dict(request.headers)}")
     logger.info(f"Query params: {dict(request.query_params)}")
     logger.info(f"Session data: {dict(request.session)}")
-    logger.info(f"Request state: {getattr(request.state, '__dict__', {})}")
+    logger.info(f"Request state attributes: {getattr(request.state, '__dict__', {})}")
+    
+    # Check specifically for X-Auth-Token header
+    x_auth_token = request.headers.get("X-Auth-Token")
+    logger.info(f"X-Auth-Token header value: {x_auth_token}")
+    
+    # Check if auth_token parameter is provided
+    logger.info(f"auth_token parameter: {auth_token}")
     
     # First try to get user from session auth or token auth (handled by middleware)
     user = None
