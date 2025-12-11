@@ -1,4 +1,4 @@
-# src/Web/web_server.py
+# src/Backend/web_server.py
 
 from typing import Literal, Optional
 from pyrogram import Client
@@ -147,7 +147,19 @@ class WebServerManager:
 # Add a standalone function to run just the web server
 async def run_standalone_web_server():
     """Run just the web server without the Telegram bot"""
-    web_manager = WebServerManager()
+    # Create a mock bot manager for standalone mode to avoid errors
+    class MockBotManager:
+        def __init__(self):
+            self.clients = []
+            self.client_list = []
+            
+        def get_least_busy_client(self):
+            return None
+            
+        def get_workload(self):
+            return 0
+    
+    web_manager = WebServerManager(MockBotManager())
     await web_manager.setup_web_server()
     
     # Keep the server running

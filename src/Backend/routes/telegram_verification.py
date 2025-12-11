@@ -30,24 +30,27 @@ async def generate_telegram_verification(
     Generate a Telegram verification code and return the least busy bot link
     """
     try:
-        
+        # Check if bot manager is available
+        if not hasattr(request.app.state, 'bot_manager') or not request.app.state.bot_manager:
+            raise HTTPException(status_code=503, detail="Bot manager not available - Telegram functionality is disabled")
+
         bot_manager = request.app.state.bot_manager
-        if not bot_manager:
-            raise HTTPException(status_code=503, detail="Bot manager not available")
-
-        if request.session.get("authenticated"):
-            username = request.session.get("username")
-            verification_code = database.Tgcodes.generate_verification_code(username)
-        else:
-            raise HTTPException(status_code=404, detail="User not found")
             
-
+        # Use the authenticated user from the require_auth dependency
+        username = user.username
+        
+        # Generate verification code using the username
+        verification_code = database.Tgcodes.generate_verification_code(username)
+            
         # Get clients
         clients = None
         if hasattr(bot_manager, 'clients'):
             clients = bot_manager.clients
         elif hasattr(bot_manager, 'client_list'):
             clients = bot_manager.client_list
+        else:
+            # Try to get clients from bot_manager directly
+            clients = getattr(bot_manager, 'clients', None) or getattr(bot_manager, 'client_list', None)
         
         if not clients:
             raise HTTPException(status_code=503, detail="No bot clients available")
@@ -70,8 +73,13 @@ async def generate_telegram_verification(
             raise HTTPException(status_code=503, detail="No available bot clients")
         
         # Get bot information
-        bot_me = least_busy_bot.me
-        if not bot_me or not bot_me.username:
+        bot_me = None
+        try:
+            bot_me = least_busy_bot.me
+        except:
+            pass
+            
+        if not bot_me or not hasattr(bot_me, 'username') or not bot_me.username:
             raise HTTPException(status_code=503, detail="Bot information unavailable")
         
         # Create verification link
@@ -85,6 +93,9 @@ async def generate_telegram_verification(
             code=verification_code
         )
         
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
         logger.error(f"Error generating Telegram verification: {e}")
         raise HTTPException(status_code=500, detail=str(e))
