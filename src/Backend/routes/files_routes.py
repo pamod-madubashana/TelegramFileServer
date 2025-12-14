@@ -188,7 +188,8 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
 async def upload_file(
     file: UploadFile = File(...),
     path: str = Form(default="/", description="Destination path for the uploaded file"),
-    user: User = Depends(require_auth)
+    user: User = Depends(require_auth),
+    request: Request = None  # Add request parameter to access bot manager
 ):
     try:
         # DEBUG: Log the received path and file info
@@ -235,9 +236,20 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="User index chat not found")        
         chat_id = user_data["index_chat_id"]
         
-        # Get the bot manager and client
-        # Note: bot_manager should be accessed from app state in the main application
-        # This will be handled in the main web.py file
+        # Get the bot manager and client from the request
+        # Access bot_manager from app state (injected by main application)
+        if not hasattr(request, 'app') or not hasattr(request.app.state, 'bot_manager'):
+            raise HTTPException(status_code=503, detail="Bot manager not available")
+        
+        bot_manager = request.app.state.bot_manager
+        if not bot_manager:
+            raise HTTPException(status_code=503, detail="Bot manager not available")
+        
+        # Get a client to use for uploading
+        from pyrogram import Client
+        client: Client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
+        if not client:
+            raise HTTPException(status_code=500, detail="No available bot clients")
         
         # Determine file type based on extension
         file_extension = os.path.splitext(file.filename)[1].lower()
