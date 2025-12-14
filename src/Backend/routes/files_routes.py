@@ -382,7 +382,7 @@ async def upload_file(
                 logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{file_id}/thumbnail")
+@router.get("/thumbnail/{file_id}")
 async def get_file_thumbnail(file_id: str, request: Request, auth_token: str = None):
     # Check authentication - first try the normal auth, then check for token in query params
     try:
