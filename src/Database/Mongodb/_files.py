@@ -114,6 +114,31 @@ class Files(Collection):
         self.insert_one(folder_doc)
         return True
 
+    def create_default_folders(self, owner_id: str = None):
+        """Create default folders for a user when they log in"""
+        default_folders = ["Images", "Documents", "Videos", "Audio", "Voice Messages"]
+        created_folders = []
+        
+        for folder_name in default_folders:
+            # Check if folder already exists
+            query = {"file_name": folder_name, "file_path": "/Home", "file_type": "folder"}
+            if owner_id:
+                query["owner_id"] = owner_id
+            existing_folder = self.find_one(query)
+            
+            if not existing_folder:
+                # Create the default folder
+                success = self.add_folder(folder_name, "/Home", owner_id)
+                if success:
+                    created_folders.append(folder_name)
+        
+        if created_folders:
+            logger.info(f"Created default folders for user {owner_id}: {created_folders}")
+        else:
+            logger.info(f"Default folders already exist for user {owner_id}")
+        
+        return created_folders
+    
     def create_folder_path(self, full_path: str, owner_id: str = None):
         """Recursively create folder structure for a given path"""
         # Log the parameters for debugging
@@ -184,7 +209,7 @@ class Files(Collection):
         # For root path, get files with path="/" and folders with path="/"
         elif path == "/" or path == "Home":
             # Get root-level files and folders
-            files_query = build_query({"file_path": "/"})
+            files_query = build_query({"file_path": "/Home"})
             all_items = list(self.find(files_query))
         else:
             # Get files and folders in the specified folder

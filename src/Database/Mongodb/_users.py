@@ -33,20 +33,6 @@ class Users(Collection):
         try:
             # First try to find by username (new structure)
             user_data = self.find_one({"username": username})
-            
-            # If not found, try to find by user_id (old structure) for backward compatibility
-            if not user_data:
-                user_data = self.find_one({"user_id": username})
-                # If found with old structure, update to new structure
-                if user_data:
-                    # Update the document to use the new structure
-                    self.update_one(
-                        {"_id": user_data["_id"]},
-                        {"$rename": {"user_id": "username"}}
-                    )
-                    # Refresh the user_data with the updated document
-                    user_data = self.find_one({"_id": user_data["_id"]})
-            
             return user_data
         except:
             return None

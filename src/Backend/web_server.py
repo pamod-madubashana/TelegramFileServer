@@ -24,7 +24,7 @@ from src.Config import WEB_APP, GOOGLE_CLIENT_ID, PORT
 logger = setup_logger(__name__)
 logger.info(f"Google Client ID from config: {GOOGLE_CLIENT_ID}")
 
-from .routes.web import _web_server  # should return FastAPI instance
+from .web import _web_server  # should return FastAPI instance
 
 logger = setup_logger(__name__)
 
