@@ -6,6 +6,7 @@ from bson import ObjectId
 import os
 import datetime
 import aiofiles
+import re
 from typing import List, Dict, Any, Optional
 from dataclasses import asdict
 
@@ -186,10 +187,10 @@ async def delete_file_route(request: DeleteFileRequest, user: User = Depends(req
 # Add file upload endpoint
 @router.post("/upload")
 async def upload_file(
+    request: Request,  # Make request parameter required to access bot manager
     file: UploadFile = File(...),
     path: str = Form(default="/", description="Destination path for the uploaded file"),
-    user: User = Depends(require_auth),
-    request: Request = None  # Add request parameter to access bot manager
+    user: User = Depends(require_auth)
 ):
     try:
         # DEBUG: Log the received path and file info
@@ -246,7 +247,6 @@ async def upload_file(
             raise HTTPException(status_code=503, detail="Bot manager not available")
         
         # Get a client to use for uploading
-        from pyrogram import Client
         client: Client = bot_manager.get_least_busy_client() if hasattr(bot_manager, 'get_least_busy_client') else None
         if not client:
             raise HTTPException(status_code=500, detail="No available bot clients")
