@@ -89,7 +89,7 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:8000", "http://127.0.0.1:8000", "tauri://localhost"],
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:8081", "tauri://localhost", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -168,7 +168,6 @@ async def health_check():
 @app.options("/api/health")
 async def health_check_options():
     return {"status": "ok"}
-
 
 
 async def _web_server(bot_manager):

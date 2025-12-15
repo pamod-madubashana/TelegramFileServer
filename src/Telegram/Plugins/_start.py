@@ -110,7 +110,7 @@ async def handle_verification_code(client: Client, message: Message, code: str) 
             
             # Create inline keyboard with "Add to Index Group" button
             bt = ButtonMaker()
-            bt.url_button("➕ Add me to Index Group", f"https://t.me/{bot_username}?startgroup=true")
+            bt.ubutton("➕ Add me to Index Group", f"https://t.me/{bot_username}?startgroup=true")
             keyboard = bt.build_menu()
             
             await message.reply(reply_text, reply_markup=keyboard)

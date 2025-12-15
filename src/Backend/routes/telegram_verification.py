@@ -10,7 +10,7 @@ from src.Database import database
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/telegram", tags=["telegram"])
+router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 class TelegramVerificationRequest(BaseModel):
     user_id: str
