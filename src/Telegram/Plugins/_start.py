@@ -21,9 +21,19 @@ async def start_command(client: Client, message: Message) -> None:
         data = message.command
         if len(data) > 1:
             data = data[1]
-            # Check if this is a verification code
-            if await handle_verification_code(client, message, data):
+            if data == "true":
+                bt = ButtonMaker()
+                bt.ibutton("Ok","make_index","header")
+                bt.ibutton("Cancel","cancel_index","header")
+                keyboard = bt.build_menu()
+                await client.send_message(chat_id=message.chat.id, text="Make this chat as Index chat ?", reply_markup=keyboard)
                 return
+            try:
+            # Check if this is a verification code
+                if await handle_verification_code(client, message, data):
+                    return
+            except Exception as e:
+                logger.error(f"Error handling verification code: {e}")
         else:
             logger.info('start command executed')
             user = message.from_user
@@ -205,81 +215,3 @@ This is {bot_name} - Your assistant for various tasks.
         await callback_query.answer("An error occurred!")
 
 
-@Client.on_chat_member_updated()
-async def bot_added_to_group_handler(client: Client, chat_member_updated: ChatMemberUpdated):
-    """
-    Handler for when the bot is added to a group.
-    Saves the group as the user's index chat.
-    """
-    try:
-        # We only care about updates where the bot's status changed
-        if not chat_member_updated.new_chat_member:
-            return
-            
-        # Check if this is the bot being added to a chat
-        if chat_member_updated.new_chat_member.user.id != client.me.id:
-            return
-            
-        # Get status information
-        chat = chat_member_updated.chat
-        user_who_added = chat_member_updated.from_user
-        new_status = chat_member_updated.new_chat_member.status.name.lower()
-        
-        # Check if there was an old status or not
-        if chat_member_updated.old_chat_member:
-            old_status = chat_member_updated.old_chat_member.status.name.lower()
-            # We want to detect when bot goes from "left" or "kicked" to "member" or "administrator"
-            status_changed = old_status in ["left", "kicked"] and new_status in ["member", "administrator"]
-        else:
-            # No old status means this might be the first time the bot is added
-            # We'll treat "member" or "administrator" as being added
-            status_changed = new_status in ["member", "administrator"]
-        
-        # Process if the bot was added/joined
-        if status_changed:
-            # Only process if it's a group (not channel or private chat)
-            if chat.type.name.lower() not in ["group", "supergroup"]:
-                return
-                
-            # Find the user in our database using their Telegram ID
-            user_data = database.Users.get_user_by_telegram_id(user_who_added.id)
-            if not user_data:
-                logger.info(f"Bot added to group {chat.id} by unknown user {user_who_added.id}")
-                # Try to send a message asking user to verify first
-                try:
-                    await client.send_message(
-                        chat_id=chat.id,
-                        text=(
-                            f"👋 Hello! Thank you for adding me to <b>{chat.title}</b>!\n\n"
-                            f"Please note that you need to verify your account with me first "
-                            f"before I can use this group for file indexing.\n\n"
-                            f"Please send me /start in private chat to verify your account."
-                        )
-                    )
-                except:
-                    pass
-                return
-                
-            # Save this chat as the user's index chat
-            username = user_data.get("username")
-            if username:
-                # Update the user's index_chat_id
-                database.Users.update_one(
-                    {"username": username},
-                    {"$set": {"index_chat_id": chat.id}},
-                    upsert=True
-                )
-                
-                # Send a confirmation message to the group
-                await client.send_message(
-                    chat_id=chat.id,
-                    text=(
-                        f"✅ Thank you for adding me to <b>{chat.title}</b>!\n\n"
-                        f"This group will now be used for indexing your files.\n"
-                        f"You can start using the file server features now."
-                    )
-                )
-                
-                logger.info(f"Bot added to group {chat.id} ({chat.title}) by user {username} ({user_who_added.id}). Set as index chat.")
-    except Exception as e:
-        logger.error(f"Error in bot_added_to_group_handler: {e}")
