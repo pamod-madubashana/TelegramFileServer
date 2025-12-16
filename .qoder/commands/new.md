@@ -25,6 +25,7 @@ Automates the entire release process by updating the version file, committing ch
    - Release notes
 3. This will automatically:
    - go to frontend `cd src/frontend` !Important . you are currenty in Root , you must go to src/frontend to execute this
+   - src/frontend is submodule (seperate repo) , So you must go to src/frontend before executing git commands otherwise it will be  effect to main repo
    - Update the `VERSION` file with the new version
    - Stage the VERSION file with `git add VERSION`
    - Create a commit with `git commit -m "new release {version}\n\n{release notes}"`

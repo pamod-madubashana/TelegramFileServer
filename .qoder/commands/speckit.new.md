@@ -27,10 +27,11 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Ensure no trailing spaces or extra lines are added
    - Save the file
 
-3. **Commit and push to the SUBMODULE repository (src/frontend)**
-   - Run: `git -C src/frontend add .`
-   - Run: `git -C src/frontend commit -m "new release {version}\n\n{releaseNotes}"`
-   - Run: `git -C src/frontend push`
+3. **Commit and push to the SUBMODULE repository (src/frontend) not main repo**
+   - Run: `cd src/frontend`
+   - Run: `git add .`
+   - Run: `git commit -m "new release {version}\n\n{releaseNotes}"`
+   - Run: `git push`
    - ✅ Inform user: "Successfully committed and pushed to src/frontend submodule."
 
 4. **Remind user about main repository**
