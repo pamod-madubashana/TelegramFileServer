@@ -40,8 +40,3 @@ You **MUST** consider the user input before proceeding (if not empty).
 ## Files involved
 - `src/frontend/VERSION` - Version file in the submodule (automatically updated)
 - `.github/workflows/tauri.yml` - GitHub Actions workflow that reads the version
-
-## Technical Details
-- Uses `git -C src/frontend` to execute git commands in the submodule directory
-- This ensures commits go to the submodule, not the parent repository
-- The `-C` flag changes git's working directory for that specific command
