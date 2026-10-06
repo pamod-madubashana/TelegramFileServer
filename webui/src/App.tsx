@@ -268,28 +268,6 @@ const WorkspaceShell = () => {
 
 
 
-const AppChrome = () => {
-  const location = useLocation();
-  const shouldShowTitleBar = location.pathname !== "/";
-
-  return (
-    <>
-      <div className="skybox-shell h-full">
-        <div className="skybox-content app-background h-full flex flex-col overflow-hidden">
-          {shouldShowTitleBar ? <TitleBar /> : null}
-          <div className="skybox-content relative flex-1 overflow-hidden">
-            <AppRoutes />
-          </div>
-        </div>
-      </div>
-      <div
-        id="floating-root"
-        className="pointer-events-none fixed inset-0 z-[140]"
-      />
-    </>
-  );
-};
-
 const App = () => {
   const router = useMemo(() => {
     const routes = [

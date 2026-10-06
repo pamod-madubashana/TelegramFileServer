@@ -24,7 +24,12 @@
 
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@tauri-apps/api/core": ["./src/lib/ipc/core.ts"],
+      "@tauri-apps/api/event": ["./src/lib/ipc/event.ts"],
+      "@tauri-apps/api/app": ["./src/lib/ipc/app.ts"],
+      "@tauri-apps/api/window": ["./src/lib/ipc/window.ts"],
+      "@tauri-apps/api/webviewWindow": ["./src/lib/ipc/webviewWindow.ts"]
     }
   },
   "include": ["src"]
