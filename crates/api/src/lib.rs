@@ -2266,7 +2266,11 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(dup.unwrap_err(), ApiError::Conflict(_)));
+        let dup_err = dup.unwrap_err();
+        assert!(
+            matches!(dup_err, ApiError::Conflict(_)),
+            "unexpected duplicate-create error: {dup_err:?}"
+        );
 
         // 2. Invited account claims its password
         let claim = auth_register(
@@ -2288,7 +2292,11 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(reclaim.unwrap_err(), ApiError::Conflict(_)));
+        let reclaim_err = reclaim.unwrap_err();
+        assert!(
+            matches!(reclaim_err, ApiError::Conflict(_)),
+            "unexpected re-register error: {reclaim_err:?}"
+        );
 
         // 3. Invited user logs in but cannot reach admin APIs
         let invited_login = auth_login(
