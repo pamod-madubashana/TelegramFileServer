@@ -1,38 +1,45 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { TelegramButton } from "@/components/skybox/TelegramButton";
 import { TelegramInput } from "@/components/skybox/TelegramInput";
 import { toast } from "@/hooks/use-toast";
 import { getVersion } from "@tauri-apps/api/app";
 import { logger } from "@/lib/logger";
+import {
+  ApiHttpError,
+  apiJson,
+  fetchAuthStatus,
+  setAuthToken,
+} from "@/lib/auth";
 import appStartIcon from "@/assets/images/icon.png";
-
-interface AuthStatusResponse {
-  needs_registration: boolean;
-}
-
-interface AuthErrorResponse {
-  error: string;
-}
 
 interface LoginResponse {
   token: string;
   username: string;
 }
 
-interface MeResponse {
+interface RegisterResponse {
+  ok: boolean;
   username: string;
 }
 
 type LoginMode = "signin" | "register";
+type RegistrationMode = "owner" | "invite";
 
 const USERNAME_REGEX = /^[A-Za-z0-9_.-]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 8;
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<LoginMode>("signin");
+  // Registration flow reported by /api/auth/status: "owner" = first-account
+  // bootstrap (username must match the Telegram owner), "invite" = claim a
+  // username an administrator created.
+  const [registration, setRegistration] =
+    useState<RegistrationMode>("invite");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -62,12 +69,10 @@ export default function LoginPage() {
 
     const checkAuthStatus = async () => {
       try {
-        const response = await fetch("/api/auth/status");
-        if (response.ok) {
-          const data: AuthStatusResponse = await response.json();
-          if (!cancelled) {
-            setMode(data.needs_registration ? "register" : "signin");
-          }
+        const data = await fetchAuthStatus();
+        if (!cancelled) {
+          setRegistration(data.registration);
+          setMode(data.needs_registration ? "register" : "signin");
         }
       } catch (error) {
         logger.warn("LoginPage: Failed to check auth status", error);
@@ -154,27 +159,36 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
-      const body = mode === "register"
-        ? { username, password }
-        : { username, password };
+      const body = JSON.stringify({ username, password });
+      const request = (path: string) =>
+        apiJson<LoginResponse | RegisterResponse>(path, {
+          method: "POST",
+          body,
+        });
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errorData: AuthErrorResponse = await response.json().catch(() => ({ error: "Request failed" }));
-        setServerError(errorData.error || `HTTP ${response.status}`);
-        return;
+      if (mode === "register") {
+        // Register claims the account (owner bootstrap or invite) but issues
+        // no session — sign in with the same credentials so the user lands in
+        // the app directly.
+        await request("/api/auth/register");
       }
 
-      const data: LoginResponse = await response.json();
-      localStorage.setItem("tfs_token", data.token);
+      const login = (await request("/api/auth/login")) as LoginResponse;
+      setAuthToken(login.token);
+      void queryClient.invalidateQueries({ queryKey: ["me"] });
       navigate("/explorer", { replace: true });
     } catch (error) {
+      if (error instanceof ApiHttpError) {
+        if (mode === "register" && error.status === 409) {
+          // Already claimed — show the reason and move to sign-in.
+          setServerError(error.message);
+          setMode("signin");
+          setConfirmPassword("");
+          return;
+        }
+        setServerError(error.message);
+        return;
+      }
       logger.error("LoginPage: Submit failed", error);
       setServerError("Network error. Please check your connection and try again.");
     } finally {
@@ -206,7 +220,9 @@ export default function LoginPage() {
               </h1>
               <p className="text-muted-foreground">
                 {mode === "register"
-                  ? "Create your account"
+                  ? registration === "owner"
+                    ? "Set up the owner account with your Telegram username"
+                    : "An administrator created your username — set a password to claim it"
                   : "Sign in to your file server"}
               </p>
             </div>
@@ -264,21 +280,31 @@ export default function LoginPage() {
                 loading={isLoading}
                 disabled={isLoading}
               >
-                {mode === "register" ? "Create Account" : "Sign In"}
+                {mode === "register"
+                  ? registration === "invite"
+                    ? "Claim Account"
+                    : "Create Owner Account"
+                  : "Sign In"}
               </TelegramButton>
             </form>
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
               {mode === "register"
                 ? "Already have an account? "
-                : "Registration is closed after the first user. "}
+                : registration === "invite"
+                  ? "Invited to join? "
+                  : "First time here? "}
               <button
                 type="button"
                 onClick={handleModeToggle}
                 className="text-primary hover:text-accent underline font-medium"
                 disabled={isLoading}
               >
-                {mode === "register" ? "Sign in" : "Create account"}
+                {mode === "register"
+                  ? "Sign in"
+                  : registration === "invite"
+                    ? "Claim account"
+                    : "Create account"}
               </button>
             </p>
           </div>

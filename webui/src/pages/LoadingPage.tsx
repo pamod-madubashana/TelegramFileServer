@@ -3,10 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import appStartIcon from "@/assets/images/icon.png";
 import { logger } from "../lib/logger";
-
-interface MeResponse {
-  username: string;
-}
+import { type MeResponse } from "@/lib/auth";
 
 export default function LoadingPage() {
   const navigate = useNavigate();
@@ -63,6 +60,7 @@ export default function LoadingPage() {
             const data: MeResponse = await response.json();
             logger.info("LoadingPage: Token valid, navigating to explorer", {
               username: data.username,
+              role: data.role,
             });
             if (!cancelled) {
               navigate("/explorer", { replace: true });
@@ -70,7 +68,13 @@ export default function LoadingPage() {
             return;
           }
 
-          if (response.status === 401) {
+          // require_session maps a missing/expired token to 400 (and a
+          // deleted account to 403) — clear the stale token in all of them.
+          if (
+            response.status === 400 ||
+            response.status === 401 ||
+            response.status === 403
+          ) {
             logger.info("LoadingPage: Token invalid/expired, clearing and redirecting to login");
             localStorage.removeItem("tfs_token");
           } else {

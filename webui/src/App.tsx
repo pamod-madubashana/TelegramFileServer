@@ -56,6 +56,9 @@ const StorageSettingsPage = lazy(
 const AppearanceSettingsPage = lazy(
   () => import("./pages/settings/AppearanceSettingsPage"),
 );
+const AdminUsersPage = lazy(
+  () => import("./pages/settings/AdminUsersPage"),
+);
 const AboutSettingsPage = lazy(
   () => import("./pages/settings/AboutSettingsPage"),
 );
@@ -334,16 +337,24 @@ const App = () => {
                   </RouteSuspense>
                 ),
               },
-              {
-                path: "appearance",
-                element: (
-                  <RouteSuspense>
-                    <AppearanceSettingsPage />
-                  </RouteSuspense>
-                ),
-              },
-              {
-                path: "about",
+          {
+            path: "appearance",
+            element: (
+              <RouteSuspense>
+                <AppearanceSettingsPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "admin",
+            element: (
+              <RouteSuspense>
+                <AdminUsersPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "about",
                 element: (
                   <RouteSuspense>
                     <AboutSettingsPage />
