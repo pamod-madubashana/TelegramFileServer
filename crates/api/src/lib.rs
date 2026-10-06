@@ -1986,7 +1986,11 @@ mod tests {
         headers
     }
 
-    #[tokio::test]
+    // Multi-thread flavor: blocking Argon2 hashing in handlers would starve the
+    // mongodb driver's SDAM monitors and IO polling on a current-thread runtime,
+    // producing spurious ConnectionPoolCleared / ServerSelection / Io(TimedOut)
+    // failures against Atlas.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore]
     async fn test_auth_register_login_me_logout_flow() {
         let uri = test_mongo_uri();
@@ -2124,7 +2128,7 @@ mod tests {
         assert!(auth_me(State(state.clone()), bearer(&token)).await.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore]
     async fn test_auth_validation_errors() {
         let uri = test_mongo_uri();
@@ -2202,7 +2206,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore]
     async fn test_admin_user_management_flow() {
         let uri = test_mongo_uri();
@@ -2348,7 +2352,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(self_role.unwrap_err(), ApiError::Forbidden(_)));
+        match self_role.unwrap_err() {
+            ApiError::Forbidden(_) => {}
+            e => panic!("expected Forbidden self-role change, got {e:?}"),
+        }
         let empty_patch = admin_update_user(
             State(state.clone()),
             owner_headers.clone(),
@@ -2359,14 +2366,20 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(empty_patch.unwrap_err(), ApiError::Validation(_)));
+        match empty_patch.unwrap_err() {
+            ApiError::Validation(_) => {}
+            e => panic!("expected Validation empty patch, got {e:?}"),
+        }
         let missing = admin_delete_user(
             State(state.clone()),
             owner_headers.clone(),
             Path("ghost".to_string()),
         )
         .await;
-        assert!(matches!(missing.unwrap_err(), ApiError::NotFound(_)));
+        match missing.unwrap_err() {
+            ApiError::NotFound(_) => {}
+            e => panic!("expected NotFound unknown user, got {e:?}"),
+        }
         let non_admin_patch = admin_update_user(
             State(state.clone()),
             invited_headers.clone(),
@@ -2389,7 +2402,10 @@ mod tests {
             Path("testuser".to_string()),
         )
         .await;
-        assert!(matches!(self_delete.unwrap_err(), ApiError::Forbidden(_)));
+        match self_delete.unwrap_err() {
+            ApiError::Forbidden(_) => {}
+            e => panic!("expected Forbidden self-delete, got {e:?}"),
+        }
 
         // 7. Resync (Fixed resolver → offline, clears the link) → 200
         let resynced = admin_resync_user(
