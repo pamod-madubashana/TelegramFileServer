@@ -1935,7 +1935,7 @@ mod tests {
     // These are marked #[ignore] per repo precedent (like test_connect_and_save_load in db tests)
 
     /// Mongo URI for integration tests: the configured encrypted config
-    /// (appdata password.json + binary-dir mongo.json) — same source the
+    /// (appdata data.tfs + binary-dir config.tfs) — same source the
     /// server uses. `MONGODB_URI` env overrides when set.
     ///
     /// CAUTION: these tests reset the `tfs_v2.v2_users` collection.
@@ -1947,7 +1947,7 @@ mod tests {
         }
         if std::env::var("TFS_BIN_DIR").is_err() {
             // Test exe lives in target/debug/deps — point config at the
-            // binary dir where mongo.json actually sits.
+            // binary dir where config.tfs actually sits.
             let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
                 .join("..")
@@ -1961,7 +1961,7 @@ mod tests {
             Ok(Some(conn)) => conn.mongo_uri,
             Ok(None) => panic!(
                 "no configured MongoDB connection — run the setup wizard \
-                 (appdata password.json + target/debug/mongo.json) or set MONGODB_URI"
+                 (appdata data.tfs + target/debug/config.tfs) or set MONGODB_URI"
             ),
             Err(e) => panic!("failed to load configured connection: {e}"),
         }
