@@ -22,6 +22,7 @@
 pub mod client;
 pub mod engine;
 pub mod error;
+pub mod lookup;
 pub mod types;
 
 pub use client::{GrammersClient, TelegramClient};

@@ -12,6 +12,9 @@ serde_json = { workspace = true }
 mongodb = { workspace = true }
 tfs-config = { path = "../config" }
 tfs-db = { path = "../db" }
+tfs-telegram = { path = "../telegram" }
+tokio = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 validator = { workspace = true }

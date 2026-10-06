@@ -4,28 +4,34 @@ use argon2::{
 };
 use axum::{
     Router,
-    extract::{Json, State},
+    extract::{Json, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
-use mongodb::{Collection, bson::doc};
+use futures::TryStreamExt;
+use mongodb::{
+    Collection,
+    bson::{self, doc},
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tfs_config::{
     CheckResponse, ConfigError, KdfParams, SaveResponse, Step1Input, Step2Input,
     appdata::{
-        ConnectionStore, delete_connection, delete_local_config, load_connection,
+        ConnectionStore, delete_connection, delete_local_config, get_bin_dir, load_connection,
         load_local_config, save_connection, save_local_config,
     },
     create_setup_config, verify_and_decrypt,
 };
 use tfs_db::{DbError, connect, has_config, load_config, save_config};
+use tfs_telegram::{GrammersClient, TelegramClient, lookup as tg_lookup};
 use thiserror::Error;
 
 /// Validate Step1Input manually (mirrors tfs-config validation)
@@ -153,19 +159,72 @@ fn verify_password_phc(password: &str, password_hash: &str) -> Result<bool, Conf
         .is_ok())
 }
 
+/// Per-account file permissions (v1 parity: read/download, write/upload).
+/// Enforcement lands with the file API routes; stored and admin-managed now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Permissions {
+    pub read: bool,
+    pub write: bool,
+}
+
+fn default_permissions() -> Permissions {
+    Permissions {
+        read: true,
+        write: true,
+    }
+}
+
+fn default_role() -> String {
+    "user".to_string()
+}
+
 /// User document in MongoDB (collection: v2_users)
+///
+/// Ownership model: every account carries the Telegram identity it belongs
+/// to (`telegram_user_id`/`telegram_username`) — file ownership is keyed on
+/// that. Accounts are never self-created except the owner: an admin creates
+/// a username-only invite (`password_hash: None`), and the invited person
+/// claims it by setting their own password via register.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserDoc {
     #[serde(rename = "_id")]
     id: String, // lowercased username
     username: String,
-    password_hash: String, // Argon2 PHC string
+    /// Argon2 PHC string. `None` = admin-created invite, not claimed yet.
+    #[serde(default)]
+    password_hash: Option<String>,
+    /// "admin" | "user". Docs written before roles existed default to "user".
+    #[serde(default = "default_role")]
+    role: String,
+    #[serde(default)]
+    telegram_user_id: Option<i64>,
+    #[serde(default)]
+    telegram_username: Option<String>,
+    #[serde(default = "default_permissions")]
+    permissions: Permissions,
     created_at: chrono::DateTime<chrono::Utc>,
+    /// Username of the admin who created this account.
+    /// `None` marks the owner account (bootstrap admin from config owner_id).
+    #[serde(default)]
+    created_by: Option<String>,
 }
 
 impl UserDoc {
     const COLLECTION_NAME: &'static str = "v2_users";
     const DATABASE_NAME: &'static str = "tfs_v2";
+
+    fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+
+    /// Owner = the bootstrap admin account (`created_by: None`).
+    fn is_owner(&self) -> bool {
+        self.created_by.is_none() && self.is_admin()
+    }
+
+    fn claimed(&self) -> bool {
+        self.password_hash.is_some()
+    }
 }
 
 fn get_users_collection(client: &mongodb::Client) -> Collection<UserDoc> {
@@ -174,32 +233,77 @@ fn get_users_collection(client: &mongodb::Client) -> Collection<UserDoc> {
         .collection(UserDoc::COLLECTION_NAME)
 }
 
-/// Check if any user exists (for registration gate)
-async fn any_user_exists(client: &mongodb::Client) -> Result<bool, DbError> {
+/// Count users with the given role ("admin" / "user")
+async fn count_role(client: &mongodb::Client, role: &str) -> Result<u64, DbError> {
     let collection = get_users_collection(client);
-    let count = collection.count_documents(doc! {}).await?;
-    Ok(count > 0)
+    let count = collection.count_documents(doc! { "role": role }).await?;
+    Ok(count)
 }
 
-/// Create a new user
-async fn create_user(
-    client: &mongodb::Client,
-    username: &str,
-    password: &str,
-) -> Result<UserDoc, DbError> {
+/// Insert a user document (duplicate _id → DbError::Connection with E11000)
+async fn insert_user(client: &mongodb::Client, user: &UserDoc) -> Result<(), DbError> {
     let collection = get_users_collection(client);
-    let id = username.to_lowercase();
-    let kdf = KdfParams::new(); // strong params, unique salt per user
-    let password_hash =
-        hash_password_phc(password, &kdf).map_err(|e| DbError::InvalidData(e.to_string()))?;
-    let user = UserDoc {
-        id: id.clone(),
-        username: username.to_string(),
-        password_hash,
-        created_at: chrono::Utc::now(),
-    };
-    collection.insert_one(&user).await?;
-    Ok(user)
+    collection.insert_one(user).await?;
+    Ok(())
+}
+
+/// Set/replace a user's password (used by the claim flow)
+async fn set_password(
+    client: &mongodb::Client,
+    id: &str,
+    password_hash: String,
+) -> Result<(), DbError> {
+    let collection = get_users_collection(client);
+    collection
+        .update_one(
+            doc! { "_id": id },
+            doc! { "$set": { "password_hash": password_hash } },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Promote an existing account to the owner/admin role and stamp its
+/// Telegram identity (self-heals accounts created before roles existed).
+async fn promote_to_owner(
+    client: &mongodb::Client,
+    id: &str,
+    telegram_user_id: Option<i64>,
+    telegram_username: &str,
+) -> Result<(), DbError> {
+    let collection = get_users_collection(client);
+    collection
+        .update_one(
+            doc! { "_id": id },
+            doc! { "$set": {
+                "role": "admin",
+                "created_by": bson::Bson::Null,
+                "telegram_user_id": telegram_user_id.map(bson::Bson::from),
+                "telegram_username": telegram_username,
+            }},
+        )
+        .await?;
+    Ok(())
+}
+
+/// Replace mutable profile fields (role / permissions / telegram link)
+async fn update_user_fields(
+    client: &mongodb::Client,
+    id: &str,
+    fields: bson::Document,
+) -> Result<(), DbError> {
+    let collection = get_users_collection(client);
+    collection
+        .update_one(doc! { "_id": id }, doc! { "$set": fields })
+        .await?;
+    Ok(())
+}
+
+/// Delete a user by id
+async fn delete_user(client: &mongodb::Client, id: &str) -> Result<(), DbError> {
+    let collection = get_users_collection(client);
+    collection.delete_one(doc! { "_id": id }).await?;
+    Ok(())
 }
 
 /// Find user by username (case-insensitive via lowercased _id)
@@ -208,6 +312,17 @@ async fn find_user(client: &mongodb::Client, username: &str) -> Result<Option<Us
     let id = username.to_lowercase();
     let user = collection.find_one(doc! { "_id": &id }).await?;
     Ok(user)
+}
+
+/// All users, sorted by username (admin listing)
+async fn list_users(client: &mongodb::Client) -> Result<Vec<UserDoc>, DbError> {
+    let collection = get_users_collection(client);
+    let mut cursor = collection.find(doc! {}).sort(doc! { "_id": 1 }).await?;
+    let mut users = Vec::new();
+    while let Some(user) = cursor.try_next().await? {
+        users.push(user);
+    }
+    Ok(users)
 }
 
 /// Auth request/response types
@@ -238,51 +353,300 @@ struct LoginResponse {
 #[derive(Debug, Serialize)]
 struct MeResponse {
     username: String,
+    role: String,
+    permissions: Permissions,
+    telegram_username: Option<String>,
+    telegram_user_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 struct AuthStatusResponse {
     needs_registration: bool,
+    /// `"owner"` — bootstrap: register with the owner's Telegram username
+    /// (becomes the admin account). `"invite"` — admin exists; invited
+    /// accounts claim their password here, everyone else signs in.
+    registration: &'static str,
 }
 
-/// GET /api/auth/status — true iff users collection is empty (or Mongo unreachable → 502)
+/// How the first (owner) account's Telegram identity is resolved.
+#[derive(Clone)]
+pub enum OwnerResolver {
+    /// Production: resolve the configured `owner_id`'s public username via
+    /// the bot credentials from the local config mirror.
+    Telegram,
+    /// Fixed identity — tests and the `TFS_OWNER_USERNAME_OVERRIDE` dev
+    /// escape hatch (bypasses Telegram verification; local use only).
+    Fixed {
+        username: String,
+        user_id: Option<i64>,
+    },
+}
+
+impl OwnerResolver {
+    fn from_env() -> Self {
+        match std::env::var("TFS_OWNER_USERNAME_OVERRIDE") {
+            Ok(name) if !name.trim().is_empty() => {
+                tracing::warn!(
+                    "TFS_OWNER_USERNAME_OVERRIDE={} — owner registration skips Telegram verification (dev/test only)",
+                    name.trim()
+                );
+                OwnerResolver::Fixed {
+                    username: name.trim().to_string(),
+                    user_id: None,
+                }
+            }
+            _ => OwnerResolver::Telegram,
+        }
+    }
+}
+
+/// Telegram credentials needed for peer lookups, loaded from the saved
+/// connection (appdata password) + local config mirror (binary dir).
+struct TelegramCreds {
+    api_id: i32,
+    api_hash: String,
+    bot_token: String,
+    owner_id: i64,
+    session_path: PathBuf,
+}
+
+fn load_telegram_creds() -> Result<TelegramCreds, ApiError> {
+    let conn = load_connection()
+        .map_err(|e| ApiError::Telegram(format!("no saved connection: {e}")))?
+        .ok_or_else(|| {
+            ApiError::Telegram(
+                "server is not configured yet — complete the setup wizard".to_string(),
+            )
+        })?;
+    let local = load_local_config(&conn.password)
+        .map_err(|e| ApiError::Telegram(format!("local config mirror unreadable: {e}")))?
+        .ok_or_else(|| {
+            ApiError::Telegram("local config mirror missing — re-run the setup wizard".to_string())
+        })?;
+    let api_id = i32::try_from(local.sensitive.api_id)
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or_else(|| {
+            ApiError::Telegram(
+                "api_id missing from local config — re-run the setup wizard".to_string(),
+            )
+        })?;
+    let bot_token = local
+        .sensitive
+        .bot_tokens
+        .iter()
+        .find(|t| !t.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::Telegram("no bot token in local config — re-run the setup wizard".to_string())
+        })?;
+    Ok(TelegramCreds {
+        api_id,
+        api_hash: local.sensitive.api_hash,
+        bot_token,
+        owner_id: local.owner_id,
+        // Dedicated session file: lookups must not contend with the transfer
+        // engine's own session when it lands.
+        session_path: get_bin_dir().join("api-lookup.session"),
+    })
+}
+
+/// Map lookup errors to actionable 503s.
+fn telegram_err(e: tfs_telegram::TelegramError) -> ApiError {
+    use tfs_telegram::TelegramError as E;
+    match &e {
+        E::FloodWait { seconds } => ApiError::Telegram(format!(
+            "Telegram is rate-limiting lookups — retry in {seconds}s"
+        )),
+        E::Rpc { code, message } => ApiError::Telegram(format!(
+            "Telegram rejected the lookup (RPC {code}: {message})"
+        )),
+        E::Config(msg) => ApiError::Telegram(msg.clone()),
+        _ => ApiError::Telegram(format!("Telegram lookup failed: {e}")),
+    }
+}
+
+type TgGuard<'a> = tokio::sync::MutexGuard<'a, Option<GrammersClient>>;
+
+/// Lazily connect (once per process) and hand out the lookup client.
+async fn tg_lookup_client(state: &AppState) -> Result<(TelegramCreds, TgGuard<'_>), ApiError> {
+    let creds = load_telegram_creds()?;
+    let mut guard = state.tg.lock().await;
+    if guard.is_none() {
+        let mut client = GrammersClient::new_bot(
+            creds.api_id,
+            creds.api_hash.clone(),
+            creds.bot_token.clone(),
+            creds.session_path.clone(),
+        );
+        client
+            .connect()
+            .await
+            .map_err(|e| ApiError::Telegram(format!("failed to connect to Telegram: {e}")))?;
+        tracing::info!(
+            "Telegram lookup client connected (session: {})",
+            creds.session_path.display()
+        );
+        *guard = Some(client);
+    }
+    Ok((creds, guard))
+}
+
+/// Resolve the configured owner's Telegram identity for owner registration.
+async fn resolve_owner_identity(state: &AppState) -> Result<(Option<i64>, String), ApiError> {
+    match &state.owner_resolver {
+        OwnerResolver::Fixed { username, user_id } => Ok((*user_id, username.clone())),
+        OwnerResolver::Telegram => {
+            let (creds, guard) = tg_lookup_client(state).await?;
+            let client = guard
+                .as_ref()
+                .and_then(|c| c.inner())
+                .ok_or_else(|| ApiError::Telegram("Telegram client unavailable".to_string()))?;
+            let name = tg_lookup::username_by_id(client, creds.owner_id)
+                .await
+                .map_err(telegram_err)?
+                .ok_or_else(|| {
+                    ApiError::Telegram(format!(
+                        "owner account {} has no public @username — set a username in Telegram, then retry",
+                        creds.owner_id
+                    ))
+                })?;
+            Ok((Some(creds.owner_id), name))
+        }
+    }
+}
+
+/// Best-effort Telegram sync: username → user id (`None` = not linked).
+/// Used at admin account creation (non-fatal) and resync (fatal on error).
+///
+/// Fixed (test/dev) resolver ⇒ always `None`: tests must never touch
+/// Telegram or the real saved config.
+async fn resolve_tg_user_id(state: &AppState, username: &str) -> Result<Option<i64>, ApiError> {
+    if matches!(state.owner_resolver, OwnerResolver::Fixed { .. }) {
+        return Ok(None);
+    }
+    let (_creds, guard) = tg_lookup_client(state).await?;
+    let client = guard
+        .as_ref()
+        .and_then(|c| c.inner())
+        .ok_or_else(|| ApiError::Telegram("Telegram client unavailable".to_string()))?;
+    tg_lookup::id_by_username(client, username)
+        .await
+        .map_err(telegram_err)
+}
+
+/// GET /api/auth/status — registration mode for the login screen.
+/// Never touches Telegram (register performs owner resolution lazily).
 async fn auth_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<AuthStatusResponse>> {
     let client = connect(&state.mongo_uri).await?;
-    let needs_registration = !any_user_exists(&client).await?;
-    Ok(Json(AuthStatusResponse { needs_registration }))
+    if count_role(&client, "admin").await? == 0 {
+        // No admin yet → owner bootstrap (create, or self-heal a legacy
+        // account carrying the owner's username).
+        return Ok(Json(AuthStatusResponse {
+            needs_registration: true,
+            registration: "owner",
+        }));
+    }
+    Ok(Json(AuthStatusResponse {
+        needs_registration: false,
+        registration: "invite",
+    }))
 }
 
 /// POST /api/auth/register
+///
+/// Two mutually exclusive flows:
+/// - No admin yet (owner bootstrap): username must match the owner's
+///   Telegram username → created as the admin account, linked to owner_id.
+/// - Admin exists: only pre-created (passwordless) invites can be claimed;
+///   any other username → 403 registration closed.
 async fn auth_register(
     State(state): State<Arc<AppState>>,
     Json(input): Json<RegisterRequest>,
 ) -> ApiResult<Json<RegisterResponse>> {
-    // Validate username
     validate_username(&input.username).map_err(ApiError::Validation)?;
-    // Validate password
     validate_password(&input.password).map_err(ApiError::Validation)?;
 
     let client = connect(&state.mongo_uri).await?;
 
-    // Registration gate: reject if any user already exists
-    if any_user_exists(&client).await? {
-        return Err(ApiError::InvalidInput("registration closed".to_string()));
+    if count_role(&client, "admin").await? == 0 {
+        // ===== Owner bootstrap =====
+        let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
+        if !input.username.eq_ignore_ascii_case(&owner_name) {
+            return Err(ApiError::Forbidden(format!(
+                "username must match the Telegram owner account \"{owner_name}\""
+            )));
+        }
+        let kdf = KdfParams::new();
+        let password_hash = hash_password_phc(&input.password, &kdf)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        return match find_user(&client, &input.username).await? {
+            None => {
+                let user = UserDoc {
+                    id: owner_name.to_lowercase(),
+                    username: owner_name.clone(),
+                    password_hash: Some(password_hash),
+                    role: "admin".to_string(),
+                    telegram_user_id: owner_id,
+                    telegram_username: Some(owner_name.clone()),
+                    permissions: default_permissions(),
+                    created_at: chrono::Utc::now(),
+                    created_by: None,
+                };
+                match insert_user(&client, &user).await {
+                    Ok(()) => {}
+                    Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
+                        return Err(ApiError::Conflict(
+                            "username already exists — sign in instead".to_string(),
+                        ));
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+                Ok(Json(RegisterResponse {
+                    ok: true,
+                    username: user.username,
+                }))
+            }
+            Some(existing) if existing.claimed() => {
+                // Account already registered under the owner's name (legacy
+                // test data): promote it to owner and ask them to sign in.
+                promote_to_owner(&client, &existing.id, owner_id, &owner_name).await?;
+                Err(ApiError::Conflict(
+                    "account already registered — sign in instead".to_string(),
+                ))
+            }
+            Some(existing) => {
+                // Owner invite sitting unclaimed: set password + promote.
+                set_password(&client, &existing.id, password_hash).await?;
+                promote_to_owner(&client, &existing.id, owner_id, &owner_name).await?;
+                Ok(Json(RegisterResponse {
+                    ok: true,
+                    username: existing.username,
+                }))
+            }
+        };
     }
 
-    // Create user (duplicate username → 409 via MongoDB duplicate key error)
-    match create_user(&client, &input.username, &input.password).await {
-        Ok(user) => Ok(Json(RegisterResponse {
-            ok: true,
-            username: user.username,
-        })),
-        Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
-            // Duplicate key error (username already exists)
-            Err(ApiError::InvalidInput(
-                "username already exists".to_string(),
-            ))
-        }
-        Err(e) => Err(e.into()),
+    // ===== Invited users: claim a username an admin created =====
+    let Some(existing) = find_user(&client, &input.username).await? else {
+        return Err(ApiError::Forbidden(
+            "registration closed — ask an administrator to create your account".to_string(),
+        ));
+    };
+    if existing.claimed() {
+        return Err(ApiError::Conflict(
+            "account already registered — sign in instead".to_string(),
+        ));
     }
+    let kdf = KdfParams::new();
+    let password_hash =
+        hash_password_phc(&input.password, &kdf).map_err(|e| ApiError::Internal(e.to_string()))?;
+    set_password(&client, &existing.id, password_hash).await?;
+    Ok(Json(RegisterResponse {
+        ok: true,
+        username: existing.username,
+    }))
 }
 
 /// POST /api/auth/login
@@ -302,8 +666,16 @@ async fn auth_login(
         }
     };
 
+    // Unclaimed invites have no password yet — indistinguishable from a
+    // wrong password (no user enumeration).
+    let Some(ref stored_hash) = user.password_hash else {
+        return Err(ApiError::InvalidInput(
+            "invalid username or password".to_string(),
+        ));
+    };
+
     // Verify password
-    if !verify_password_phc(&input.password, &user.password_hash)
+    if !verify_password_phc(&input.password, stored_hash)
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
         return Err(ApiError::InvalidInput(
@@ -320,13 +692,24 @@ async fn auth_login(
     }))
 }
 
-/// GET /api/auth/me — requires Bearer token, returns username, refreshes sliding TTL
+/// GET /api/auth/me — requires Bearer token, returns profile + role,
+/// refreshes sliding TTL.
 async fn auth_me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> ApiResult<Json<MeResponse>> {
     let username = require_session(&headers, &state.sessions)?;
-    Ok(Json(MeResponse { username }))
+    let client = connect(&state.mongo_uri).await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    Ok(Json(MeResponse {
+        username: user.username,
+        role: user.role,
+        permissions: user.permissions,
+        telegram_username: user.telegram_username,
+        telegram_user_id: user.telegram_user_id,
+    }))
 }
 
 /// POST /api/auth/logout — idempotent, 204 even for unknown token
@@ -471,6 +854,14 @@ pub enum ApiError {
     Validation(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("telegram unavailable: {0}")]
+    Telegram(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -507,6 +898,17 @@ impl IntoResponse for ApiError {
             }
             ApiError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
             ApiError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone(), None),
+            ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
+            ApiError::Telegram(msg) => {
+                tracing::error!(error = %msg, "Telegram lookup unavailable");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    msg.clone(),
+                    Some(msg.clone()),
+                )
+            }
             _ => {
                 tracing::error!(error = %self, "unhandled API error");
                 (
@@ -531,6 +933,10 @@ pub type ApiResult<T> = std::result::Result<T, ApiError>;
 pub struct AppState {
     pub mongo_uri: String,
     pub sessions: SessionStore,
+    /// Owner-identity resolution strategy (env-overridable, see `OwnerResolver`).
+    pub owner_resolver: OwnerResolver,
+    /// Lazily-connected Telegram lookup client (owner/username sync).
+    tg: Arc<tokio::sync::Mutex<Option<GrammersClient>>>,
 }
 
 impl AppState {
@@ -538,7 +944,16 @@ impl AppState {
         Self {
             mongo_uri,
             sessions: new_session_store(),
+            owner_resolver: OwnerResolver::from_env(),
+            tg: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+
+    /// Tests/dev: fixed owner identity, no Telegram involved.
+    #[cfg(test)]
+    fn with_owner_resolver(mut self, resolver: OwnerResolver) -> Self {
+        self.owner_resolver = resolver;
+        self
     }
 }
 
@@ -777,6 +1192,282 @@ pub struct SaveSetupInput {
     pub default_chat_id: i64,
 }
 
+// ===== Admin user management =====
+
+/// Admin-facing user view (never exposes password hashes).
+#[derive(Debug, Serialize)]
+struct UserSummary {
+    username: String,
+    role: String,
+    permissions: Permissions,
+    telegram_username: Option<String>,
+    telegram_user_id: Option<i64>,
+    /// False until the invited owner has set their password.
+    claimed: bool,
+    /// True for the bootstrap owner account.
+    is_owner: bool,
+    created_at: chrono::DateTime<chrono::Utc>,
+    created_by: Option<String>,
+}
+
+impl From<&UserDoc> for UserSummary {
+    fn from(u: &UserDoc) -> Self {
+        Self {
+            username: u.username.clone(),
+            role: u.role.clone(),
+            permissions: u.permissions,
+            telegram_username: u.telegram_username.clone(),
+            telegram_user_id: u.telegram_user_id,
+            claimed: u.claimed(),
+            is_owner: u.is_owner(),
+            created_at: u.created_at,
+            created_by: u.created_by.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AdminUsersResponse {
+    users: Vec<UserSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminCreateUserRequest {
+    username: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionsPatch {
+    read: Option<bool>,
+    write: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminUpdateUserRequest {
+    #[serde(default)]
+    permissions: Option<PermissionsPatch>,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+/// Require a valid session AND the admin role; returns the acting user.
+async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<UserDoc, ApiError> {
+    let username = require_session(headers, &state.sessions)?;
+    let client = connect(&state.mongo_uri).await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.is_admin() {
+        return Err(ApiError::Forbidden(
+            "administrator access required".to_string(),
+        ));
+    }
+    Ok(user)
+}
+
+/// GET /api/admin/users — full user list (admin only)
+async fn admin_list_users(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<AdminUsersResponse>> {
+    let _actor = require_admin(&headers, &state).await?;
+    let client = connect(&state.mongo_uri).await?;
+    let users = list_users(&client).await?;
+    Ok(Json(AdminUsersResponse {
+        users: users.iter().map(UserSummary::from).collect(),
+    }))
+}
+
+/// POST /api/admin/users — create a username-only invite (no password;
+/// the invited owner claims it via register).
+///
+/// Telegram sync is best-effort: creation succeeds even when the lookup
+/// fails (no config / not resolvable) — the admin can resync later.
+async fn admin_create_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<AdminCreateUserRequest>,
+) -> ApiResult<(StatusCode, Json<UserSummary>)> {
+    validate_username(&input.username).map_err(ApiError::Validation)?;
+    let actor = require_admin(&headers, &state).await?;
+    let client = connect(&state.mongo_uri).await?;
+    if find_user(&client, &input.username).await?.is_some() {
+        return Err(ApiError::Conflict("username already exists".to_string()));
+    }
+
+    let (telegram_user_id, telegram_username) = match resolve_tg_user_id(&state, &input.username)
+        .await
+    {
+        Ok(Some(id)) => (Some(id), Some(input.username.clone())),
+        Ok(None) => {
+            tracing::info!(
+                "invite {} created unlinked — no Telegram user resolves to that username (resync later)",
+                input.username
+            );
+            (None, None)
+        }
+        Err(e) => {
+            tracing::warn!("telegram sync skipped for invite {}: {}", input.username, e);
+            (None, None)
+        }
+    };
+
+    let user = UserDoc {
+        id: input.username.to_lowercase(),
+        username: input.username.clone(),
+        password_hash: None,
+        role: "user".to_string(),
+        telegram_user_id,
+        telegram_username,
+        permissions: default_permissions(),
+        created_at: chrono::Utc::now(),
+        created_by: Some(actor.username.clone()),
+    };
+    match insert_user(&client, &user).await {
+        Ok(()) => {}
+        Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
+            return Err(ApiError::Conflict("username already exists".to_string()));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok((StatusCode::CREATED, Json(UserSummary::from(&user))))
+}
+
+/// PATCH /api/admin/users/:username — update permissions and/or role.
+///
+/// Guards: can't touch your own role, can't touch the owner's role,
+/// can't demote the last administrator.
+async fn admin_update_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+    Json(input): Json<AdminUpdateUserRequest>,
+) -> ApiResult<Json<UserSummary>> {
+    let actor = require_admin(&headers, &state).await?;
+    let client = connect(&state.mongo_uri).await?;
+    let target = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+
+    let mut fields = bson::Document::new();
+
+    if let Some(role) = &input.role {
+        if role != "admin" && role != "user" {
+            return Err(ApiError::Validation(
+                "role must be \"admin\" or \"user\"".to_string(),
+            ));
+        }
+        if target.id == actor.id {
+            return Err(ApiError::Forbidden(
+                "cannot change your own role".to_string(),
+            ));
+        }
+        if target.is_owner() {
+            return Err(ApiError::Forbidden(
+                "cannot change the owner's role".to_string(),
+            ));
+        }
+        if role == "user" && target.is_admin() && count_role(&client, "admin").await? <= 1 {
+            return Err(ApiError::Forbidden(
+                "cannot demote the last administrator".to_string(),
+            ));
+        }
+        fields.insert("role", role.as_str());
+    }
+
+    if let Some(patch) = &input.permissions {
+        let mut perms = target.permissions;
+        if let Some(r) = patch.read {
+            perms.read = r;
+        }
+        if let Some(w) = patch.write {
+            perms.write = w;
+        }
+        let bson_perms = bson::to_bson(&perms)
+            .map_err(|e| ApiError::Internal(format!("permissions serialization: {e}")))?;
+        fields.insert("permissions", bson_perms);
+    }
+
+    if fields.is_empty() {
+        return Err(ApiError::Validation(
+            "nothing to update — provide role and/or permissions".to_string(),
+        ));
+    }
+
+    update_user_fields(&client, &target.id, fields).await?;
+    let updated = find_user(&client, &target.id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+    Ok(Json(UserSummary::from(&updated)))
+}
+
+/// DELETE /api/admin/users/:username — remove an account.
+///
+/// Guards: can't delete yourself, the owner, or the last administrator.
+async fn admin_delete_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> ApiResult<StatusCode> {
+    let actor = require_admin(&headers, &state).await?;
+    let client = connect(&state.mongo_uri).await?;
+    let target = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+
+    if target.id == actor.id {
+        return Err(ApiError::Forbidden(
+            "cannot delete your own account".to_string(),
+        ));
+    }
+    if target.is_owner() {
+        return Err(ApiError::Forbidden(
+            "cannot delete the owner account".to_string(),
+        ));
+    }
+    if target.is_admin() && count_role(&client, "admin").await? <= 1 {
+        return Err(ApiError::Forbidden(
+            "cannot delete the last administrator".to_string(),
+        ));
+    }
+    delete_user(&client, &target.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/admin/users/:username/resync — re-run the Telegram username
+/// sync. Fatal on lookup failure (admin action: surface the reason so they
+/// can retry). Unresolvable username clears the stored link.
+async fn admin_resync_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> ApiResult<Json<UserSummary>> {
+    let _actor = require_admin(&headers, &state).await?;
+    let client = connect(&state.mongo_uri).await?;
+    let target = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+
+    let tg_id = resolve_tg_user_id(&state, &target.username).await?;
+    let mut fields = bson::Document::new();
+    fields.insert(
+        "telegram_user_id",
+        tg_id.map(bson::Bson::from).unwrap_or(bson::Bson::Null),
+    );
+    fields.insert(
+        "telegram_username",
+        match tg_id {
+            Some(_) => bson::Bson::String(target.username.clone()),
+            None => bson::Bson::Null,
+        },
+    );
+    update_user_fields(&client, &target.id, fields).await?;
+    let updated = find_user(&client, &target.id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
+    Ok(Json(UserSummary::from(&updated)))
+}
+
 pub fn router(mongo_uri: String) -> Router {
     let state = Arc::new(AppState::new(mongo_uri));
     Router::new()
@@ -788,6 +1479,15 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(auth_logout))
+        .route(
+            "/api/admin/users",
+            get(admin_list_users).post(admin_create_user),
+        )
+        .route(
+            "/api/admin/users/:username",
+            patch(admin_update_user).delete(admin_delete_user),
+        )
+        .route("/api/admin/users/:username/resync", post(admin_resync_user))
         .with_state(state)
 }
 
@@ -1231,31 +1931,97 @@ mod tests {
     }
 
     // ===== Auth integration tests (require MongoDB) =====
-    // Run with: cargo test --test auth_integration -- --ignored
+    // Run with: cargo test -p tfs-api -- --ignored
     // These are marked #[ignore] per repo precedent (like test_connect_and_save_load in db tests)
+
+    /// Mongo URI for integration tests: the configured encrypted config
+    /// (appdata password.json + binary-dir mongo.json) — same source the
+    /// server uses. `MONGODB_URI` env overrides when set.
+    ///
+    /// CAUTION: these tests reset the `tfs_v2.v2_users` collection.
+    fn test_mongo_uri() -> String {
+        if let Ok(uri) = std::env::var("MONGODB_URI")
+            && !uri.is_empty()
+        {
+            return uri;
+        }
+        if std::env::var("TFS_BIN_DIR").is_err() {
+            // Test exe lives in target/debug/deps — point config at the
+            // binary dir where mongo.json actually sits.
+            let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("debug");
+            // SAFETY: tests only read this; value is identical whichever
+            // thread sets it first (all three tests want the same dir).
+            unsafe { std::env::set_var("TFS_BIN_DIR", bin) };
+        }
+        match load_connection() {
+            Ok(Some(conn)) => conn.mongo_uri,
+            Ok(None) => panic!(
+                "no configured MongoDB connection — run the setup wizard \
+                 (appdata password.json + target/debug/mongo.json) or set MONGODB_URI"
+            ),
+            Err(e) => panic!("failed to load configured connection: {e}"),
+        }
+    }
+
+    /// Test state: fixed owner identity — no Telegram, no saved config.
+    fn test_state(uri: &str) -> Arc<AppState> {
+        Arc::new(
+            AppState::new(uri.to_string()).with_owner_resolver(OwnerResolver::Fixed {
+                username: "testuser".to_string(),
+                user_id: Some(999999),
+            }),
+        )
+    }
+
+    fn bearer(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        );
+        headers
+    }
 
     #[tokio::test]
     #[ignore]
     async fn test_auth_register_login_me_logout_flow() {
-        let uri = std::env::var("MONGODB_URI")
-            .unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+        let uri = test_mongo_uri();
         let client = connect(&uri).await.unwrap();
 
         // Clean up any existing users
         let collection = get_users_collection(&client);
         collection.delete_many(doc! {}).await.unwrap();
 
-        let state = Arc::new(AppState::new(uri.clone()));
+        let state = test_state(&uri);
 
-        // 1. Status: needs_registration = true (empty collection)
+        // 1. Status: owner bootstrap on an empty collection
         let status = auth_status(State(state.clone())).await.unwrap();
         assert!(status.0.needs_registration);
+        assert_eq!(status.0.registration, "owner");
 
-        // 2. Register first user
+        // 2. Non-owner username → 403 before anything is written
         let reg = auth_register(
             State(state.clone()),
             Json(RegisterRequest {
-                username: "testuser".to_string(),
+                username: "intruder".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await;
+        match reg.unwrap_err() {
+            ApiError::Forbidden(msg) => assert!(msg.contains("must match the Telegram owner")),
+            e => panic!("expected Forbidden owner mismatch, got {e:?}"),
+        }
+
+        // 3. Register with the owner's username → admin account
+        let reg = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "TestUser".to_string(), // case-insensitive match
                 password: "password123".to_string(),
             }),
         )
@@ -1264,11 +2030,20 @@ mod tests {
         assert!(reg.0.ok);
         assert_eq!(reg.0.username, "testuser");
 
-        // 3. Status: needs_registration = false (user exists)
+        // Owner doc: role, telegram identity from owner_id, no created_by
+        let owner = find_user(&client, "testuser").await.unwrap().unwrap();
+        assert_eq!(owner.role, "admin");
+        assert!(owner.is_owner());
+        assert_eq!(owner.telegram_user_id, Some(999999));
+        assert_eq!(owner.telegram_username.as_deref(), Some("testuser"));
+        assert!(owner.claimed());
+
+        // 4. Status: admin exists → invite mode
         let status = auth_status(State(state.clone())).await.unwrap();
         assert!(!status.0.needs_registration);
+        assert_eq!(status.0.registration, "invite");
 
-        // 4. Register again → 403 registration closed
+        // 5. Unknown username → 403 registration closed
         let reg2 = auth_register(
             State(state.clone()),
             Json(RegisterRequest {
@@ -1277,13 +2052,12 @@ mod tests {
             }),
         )
         .await;
-        assert!(reg2.is_err());
         match reg2.unwrap_err() {
-            ApiError::InvalidInput(msg) => assert_eq!(msg, "registration closed"),
-            _ => panic!("expected InvalidInput registration closed"),
+            ApiError::Forbidden(msg) => assert!(msg.contains("registration closed")),
+            e => panic!("expected Forbidden registration closed, got {e:?}"),
         }
 
-        // 5. Login with correct password
+        // 6. Login with correct password
         let login = auth_login(
             State(state.clone()),
             Json(LoginRequest {
@@ -1297,7 +2071,7 @@ mod tests {
         assert_eq!(login.0.username, "testuser");
         let token = login.0.token;
 
-        // 6. Login with wrong password → 401 (same message as wrong user)
+        // 7. Login with wrong password → same error as wrong user
         let login_wrong = auth_login(
             State(state.clone()),
             Json(LoginRequest {
@@ -1306,13 +2080,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(login_wrong.is_err());
         match login_wrong.unwrap_err() {
             ApiError::InvalidInput(msg) => assert_eq!(msg, "invalid username or password"),
-            _ => panic!("expected InvalidInput invalid username or password"),
+            e => panic!("expected InvalidInput, got {e:?}"),
         }
-
-        // 7. Login with non-existent user → 401 (same message, no user enumeration)
         let login_no_user = auth_login(
             State(state.clone()),
             Json(LoginRequest {
@@ -1322,73 +2093,50 @@ mod tests {
         )
         .await;
         assert!(login_no_user.is_err());
-        match login_no_user.unwrap_err() {
-            ApiError::InvalidInput(msg) => assert_eq!(msg, "invalid username or password"),
-            _ => panic!("expected InvalidInput invalid username or password"),
-        }
 
-        // 8. /me with valid token → 200 {username}
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-        );
-        let me = auth_me(State(state.clone()), headers).await.unwrap();
+        // 8. /me → profile with role and permissions
+        let me = auth_me(State(state.clone()), bearer(&token)).await.unwrap();
         assert_eq!(me.0.username, "testuser");
+        assert_eq!(me.0.role, "admin");
+        assert!(me.0.permissions.read && me.0.permissions.write);
+        assert_eq!(me.0.telegram_username.as_deref(), Some("testuser"));
+        assert_eq!(me.0.telegram_user_id, Some(999999));
 
-        // 9. /me with invalid token → 401
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("Bearer invalid"));
-        let me_invalid = auth_me(State(state.clone()), headers).await;
-        assert!(me_invalid.is_err());
-
-        // 10. /me without token → 401
-        let headers = HeaderMap::new();
-        let me_no_token = auth_me(State(state.clone()), headers).await;
-        assert!(me_no_token.is_err());
-
-        // 11. Logout → 204
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        // 9. /me with invalid / missing token → error
+        let mut bad = HeaderMap::new();
+        bad.insert("authorization", HeaderValue::from_static("Bearer invalid"));
+        assert!(auth_me(State(state.clone()), bad).await.is_err());
+        assert!(
+            auth_me(State(state.clone()), HeaderMap::new())
+                .await
+                .is_err()
         );
-        let logout = auth_logout(State(state.clone()), headers).await.unwrap();
+
+        // 10. Logout → 204, idempotent; /me afterwards → error
+        let logout = auth_logout(State(state.clone()), bearer(&token))
+            .await
+            .unwrap();
         assert_eq!(logout.into_response().status(), StatusCode::NO_CONTENT);
-
-        // 12. Logout again (idempotent) → 204
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-        );
-        let logout2 = auth_logout(State(state.clone()), headers).await.unwrap();
+        let logout2 = auth_logout(State(state.clone()), bearer(&token))
+            .await
+            .unwrap();
         assert_eq!(logout2.into_response().status(), StatusCode::NO_CONTENT);
-
-        // 13. /me after logout → 401
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-        );
-        let me_after_logout = auth_me(State(state.clone()), headers).await;
-        assert!(me_after_logout.is_err());
+        assert!(auth_me(State(state.clone()), bearer(&token)).await.is_err());
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_auth_validation_errors() {
-        let uri = std::env::var("MONGODB_URI")
-            .unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+        let uri = test_mongo_uri();
         let client = connect(&uri).await.unwrap();
 
         // Clean up
         let collection = get_users_collection(&client);
         collection.delete_many(doc! {}).await.unwrap();
 
-        let state = Arc::new(AppState::new(uri));
+        let state = test_state(&uri);
 
-        // Username too short
+        // Username too short (validated before any Telegram/Mongo write)
         let reg = auth_register(
             State(state.clone()),
             Json(RegisterRequest {
@@ -1397,10 +2145,9 @@ mod tests {
             }),
         )
         .await;
-        assert!(reg.is_err());
         match reg.unwrap_err() {
             ApiError::Validation(msg) => assert!(msg.contains("3-32 characters")),
-            _ => panic!("expected Validation error"),
+            e => panic!("expected Validation error, got {e:?}"),
         }
 
         // Username invalid chars
@@ -1412,10 +2159,9 @@ mod tests {
             }),
         )
         .await;
-        assert!(reg.is_err());
         match reg.unwrap_err() {
             ApiError::Validation(msg) => assert!(msg.contains("letters, numbers")),
-            _ => panic!("expected Validation error"),
+            e => panic!("expected Validation error, got {e:?}"),
         }
 
         // Password too short
@@ -1427,34 +2173,240 @@ mod tests {
             }),
         )
         .await;
-        assert!(reg.is_err());
         match reg.unwrap_err() {
             ApiError::Validation(msg) => assert!(msg.contains("at least 8 characters")),
-            _ => panic!("expected Validation error"),
+            e => panic!("expected Validation error, got {e:?}"),
         }
 
-        // Duplicate username → 409
+        // Register owner, then again → conflict (already registered)
         let _ = auth_register(
             State(state.clone()),
             Json(RegisterRequest {
-                username: "dupuser".to_string(),
+                username: "testuser".to_string(),
                 password: "password123".to_string(),
             }),
         )
         .await
         .unwrap();
-        let reg = auth_register(
+        let dup = auth_register(
             State(state.clone()),
             Json(RegisterRequest {
-                username: "dupuser".to_string(),
+                username: "testuser".to_string(),
                 password: "password123".to_string(),
             }),
         )
         .await;
-        assert!(reg.is_err());
-        match reg.unwrap_err() {
-            ApiError::InvalidInput(msg) => assert_eq!(msg, "username already exists"),
-            _ => panic!("expected InvalidInput username already exists"),
+        match dup.unwrap_err() {
+            ApiError::Conflict(msg) => assert!(msg.contains("already registered")),
+            e => panic!("expected Conflict, got {e:?}"),
         }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_admin_user_management_flow() {
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+        let collection = get_users_collection(&client);
+        collection.delete_many(doc! {}).await.unwrap();
+
+        let state = test_state(&uri);
+
+        // Bootstrap owner + login
+        let _ = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let login = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let owner_headers = bearer(&login.0.token);
+
+        // Unauthenticated list → error
+        assert!(
+            admin_list_users(State(state.clone()), HeaderMap::new())
+                .await
+                .is_err()
+        );
+
+        // 1. Create username-only invite (offline telegram sync → unlinked)
+        let (code, created) = admin_create_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Json(AdminCreateUserRequest {
+                username: "invited".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CREATED);
+        assert_eq!(created.0.username, "invited");
+        assert!(!created.0.claimed);
+        assert!(!created.0.is_owner);
+        assert_eq!(created.0.created_by.as_deref(), Some("testuser"));
+        assert_eq!(created.0.telegram_user_id, None);
+
+        // Duplicate invite → conflict
+        let dup = admin_create_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Json(AdminCreateUserRequest {
+                username: "invited".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(dup.unwrap_err(), ApiError::Conflict(_)));
+
+        // 2. Invited account claims its password
+        let claim = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "invited".to_string(),
+                password: "invitedpass1".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(claim.0.ok);
+        // Claim again → conflict
+        let reclaim = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "invited".to_string(),
+                password: "anotherpass1".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(reclaim.unwrap_err(), ApiError::Conflict(_)));
+
+        // 3. Invited user logs in but cannot reach admin APIs
+        let invited_login = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "invited".to_string(),
+                password: "invitedpass1".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let invited_headers = bearer(&invited_login.0.token);
+        let me = auth_me(State(state.clone()), invited_headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(me.0.role, "user");
+        let denied = admin_list_users(State(state.clone()), invited_headers.clone()).await;
+        match denied.unwrap_err() {
+            ApiError::Forbidden(msg) => assert!(msg.contains("administrator")),
+            e => panic!("expected Forbidden, got {e:?}"),
+        }
+
+        // 4. Owner patches invited permissions
+        let updated = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: Some(PermissionsPatch {
+                    read: Some(true),
+                    write: Some(false),
+                }),
+                role: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(updated.0.permissions.read);
+        assert!(!updated.0.permissions.write);
+
+        // 5. Guards: self role change, empty patch, unknown user, non-admin patch
+        let self_role = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("testuser".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: Some("user".to_string()),
+            }),
+        )
+        .await;
+        assert!(matches!(self_role.unwrap_err(), ApiError::Forbidden(_)));
+        let empty_patch = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: None,
+            }),
+        )
+        .await;
+        assert!(matches!(empty_patch.unwrap_err(), ApiError::Validation(_)));
+        let missing = admin_delete_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("ghost".to_string()),
+        )
+        .await;
+        assert!(matches!(missing.unwrap_err(), ApiError::NotFound(_)));
+        let non_admin_patch = admin_update_user(
+            State(state.clone()),
+            invited_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: Some("admin".to_string()),
+            }),
+        )
+        .await;
+        assert!(matches!(
+            non_admin_patch.unwrap_err(),
+            ApiError::Forbidden(_)
+        ));
+
+        // 6. Owner cannot delete themselves
+        let self_delete = admin_delete_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("testuser".to_string()),
+        )
+        .await;
+        assert!(matches!(self_delete.unwrap_err(), ApiError::Forbidden(_)));
+
+        // 7. Resync (Fixed resolver → offline, clears the link) → 200
+        let resynced = admin_resync_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resynced.0.telegram_user_id, None);
+
+        // 8. Delete invited → 204; list shows only the owner
+        let deleted = admin_delete_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted, StatusCode::NO_CONTENT);
+        let list = admin_list_users(State(state.clone()), owner_headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(list.0.users.len(), 1);
+        assert_eq!(list.0.users[0].username, "testuser");
+        assert!(list.0.users[0].is_owner);
     }
 }
