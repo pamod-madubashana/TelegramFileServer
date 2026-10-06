@@ -70,10 +70,11 @@ impl KdfParams {
         }
     }
 
-    /// Cheap params for files that live NEXT TO the plaintext wizard
-    /// password (appdata password.json / binary-dir files). The password
-    /// sits beside them by design, so brute-force resistance of these local
-    /// files comes from that layout — not from expensive hashing. Using the
+    /// Cheap params for the encrypted halves of the local store
+    /// (binary-dir `config.tfs`): the plaintext wizard password sits in
+    /// appdata `data.tfs` on the same machine by design, so brute-force
+    /// resistance of these local files comes from that layout — not from
+    /// expensive hashing. Using the
     /// strong 64 MB × 3 params here made every resume pay seconds of
     /// Argon2 before responding; these params hash in ~10 ms.
     pub fn local() -> Self {

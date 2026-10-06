@@ -583,7 +583,7 @@ async fn check_setup(
     if let Err(e) = save_local_config(&config, &sensitive, &input.password) {
         tracing::warn!("Failed to mirror setup config locally: {}", e);
     } else {
-        tracing::info!("Setup check: config mirrored to local setup.json");
+        tracing::info!("Setup check: config mirrored to local config.tfs");
     }
 
     Ok(Json(CheckResponse {
