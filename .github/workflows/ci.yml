@@ -32,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      # Private user database per run: these tests reset their user collection
+      # up front, so overlapping runs must not share tfs_v2 or they delete each
+      # other's fixtures and fail spuriously.
+      TFS_USER_DB: tfs_v2_ci_${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

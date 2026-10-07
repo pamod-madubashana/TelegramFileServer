@@ -227,9 +227,24 @@ impl UserDoc {
     }
 }
 
+/// Database holding user documents.
+///
+/// Defaults to the canonical `tfs_v2` database. `TFS_USER_DB` redirects it so
+/// an integration suite — which resets `v2_users` at the start of every test —
+/// can claim a private database. Without this, two concurrent runs (e.g. a
+/// `pull_request` run overlapping a `push` run) delete each other's fixtures
+/// mid-test and fail spuriously. Unset in production, so behaviour there is
+/// unchanged.
+fn users_database_name() -> String {
+    std::env::var("TFS_USER_DB")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| UserDoc::DATABASE_NAME.to_string())
+}
+
 fn get_users_collection(client: &mongodb::Client) -> Collection<UserDoc> {
     client
-        .database(UserDoc::DATABASE_NAME)
+        .database(&users_database_name())
         .collection(UserDoc::COLLECTION_NAME)
 }
 
