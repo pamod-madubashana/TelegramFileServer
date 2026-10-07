@@ -11,7 +11,7 @@ use axum::{
 };
 use futures::TryStreamExt;
 use mongodb::{
-    Collection,
+    Client, Collection,
     bson::{self, doc},
 };
 use rand::RngCore;
@@ -553,7 +553,7 @@ async fn resolve_tg_user_id(state: &AppState, username: &str) -> Result<Option<i
 /// GET /api/auth/status — registration mode for the login screen.
 /// Never touches Telegram (register performs owner resolution lazily).
 async fn auth_status(State(state): State<Arc<AppState>>) -> ApiResult<Json<AuthStatusResponse>> {
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     if count_role(&client, "admin").await? == 0 {
         // No admin yet → owner bootstrap (create, or self-heal a legacy
         // account carrying the owner's username).
@@ -582,7 +582,7 @@ async fn auth_register(
     validate_username(&input.username).map_err(ApiError::Validation)?;
     validate_password(&input.password).map_err(ApiError::Validation)?;
 
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
 
     if count_role(&client, "admin").await? == 0 {
         // ===== Owner bootstrap =====
@@ -669,7 +669,7 @@ async fn auth_login(
     State(state): State<Arc<AppState>>,
     Json(input): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
 
     let user = match find_user(&client, &input.username).await? {
         Some(u) => u,
@@ -714,7 +714,7 @@ async fn auth_me(
     headers: HeaderMap,
 ) -> ApiResult<Json<MeResponse>> {
     let username = require_session(&headers, &state.sessions)?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let user = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
@@ -952,6 +952,13 @@ pub struct AppState {
     pub owner_resolver: OwnerResolver,
     /// Lazily-connected Telegram lookup client (owner/username sync).
     tg: Arc<tokio::sync::Mutex<Option<GrammersClient>>>,
+    /// Lazily-built Mongo client, shared for the process lifetime.
+    ///
+    /// `mongodb::Client` owns a connection pool and performs topology discovery
+    /// when it is built. The auth/admin handlers used to call `connect()` on
+    /// every request, repeating that work and dropping the pool as soon as the
+    /// response was written.
+    mongo: Arc<tokio::sync::OnceCell<Client>>,
 }
 
 impl AppState {
@@ -961,7 +968,21 @@ impl AppState {
             sessions: new_session_store(),
             owner_resolver: OwnerResolver::from_env(),
             tg: Arc::new(tokio::sync::Mutex::new(None)),
+            mongo: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// The shared Mongo client, built on first use with the same fast timeouts
+    /// and ping as `tfs_db::connect`.
+    ///
+    /// A failed attempt is not cached, so a transient outage still recovers on
+    /// the next request instead of latching an unusable client.
+    pub async fn mongo_client(&self) -> Result<Client, DbError> {
+        let client = self
+            .mongo
+            .get_or_try_init(|| connect(&self.mongo_uri))
+            .await?;
+        Ok(client.clone())
     }
 
     /// Tests/dev: fixed owner identity, no Telegram involved.
@@ -1268,7 +1289,7 @@ struct AdminUpdateUserRequest {
 /// Require a valid session AND the admin role; returns the acting user.
 async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<UserDoc, ApiError> {
     let username = require_session(headers, &state.sessions)?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let user = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
@@ -1286,7 +1307,7 @@ async fn admin_list_users(
     headers: HeaderMap,
 ) -> ApiResult<Json<AdminUsersResponse>> {
     let _actor = require_admin(&headers, &state).await?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let users = list_users(&client).await?;
     Ok(Json(AdminUsersResponse {
         users: users.iter().map(UserSummary::from).collect(),
@@ -1305,7 +1326,7 @@ async fn admin_create_user(
 ) -> ApiResult<(StatusCode, Json<UserSummary>)> {
     validate_username(&input.username).map_err(ApiError::Validation)?;
     let actor = require_admin(&headers, &state).await?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     if find_user(&client, &input.username).await?.is_some() {
         return Err(ApiError::Conflict("username already exists".to_string()));
     }
@@ -1359,7 +1380,7 @@ async fn admin_update_user(
     Json(input): Json<AdminUpdateUserRequest>,
 ) -> ApiResult<Json<UserSummary>> {
     let actor = require_admin(&headers, &state).await?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let target = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
@@ -1425,7 +1446,7 @@ async fn admin_delete_user(
     Path(username): Path<String>,
 ) -> ApiResult<StatusCode> {
     let actor = require_admin(&headers, &state).await?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let target = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
@@ -1458,7 +1479,7 @@ async fn admin_resync_user(
     Path(username): Path<String>,
 ) -> ApiResult<Json<UserSummary>> {
     let _actor = require_admin(&headers, &state).await?;
-    let client = connect(&state.mongo_uri).await?;
+    let client = state.mongo_client().await?;
     let target = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::NotFound("user not found".to_string()))?;
