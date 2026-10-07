@@ -280,7 +280,7 @@ fn terminate(pid: u32) -> anyhow::Result<()> {
 fn terminate(pid: u32) -> anyhow::Result<()> {
     const SIGTERM: i32 = 15;
 
-    extern "C" {
+    unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
 
