@@ -316,6 +316,60 @@ pub fn decrypt_sensitive(
     decrypt_value(encrypted, password, kdf)
 }
 
+/// Outer seal key for `.tfs` containers, carried by this binary alone.
+///
+/// Wraps the entire container payload so a text editor sees only random
+/// bytes. It is deliberately not the wizard password: the password lives
+/// *inside* the payload, so it cannot also be the key that opens it, and
+/// `load_connection` must read `data.tfs` unattended at startup.
+///
+/// It is deliberately not machine-bound either (DPAPI / user scope):
+/// `config.tfs` sits next to the exe so an install can travel with the
+/// binary, and a machine-bound key would break moving it to another box.
+///
+/// Threat model: this stops casual and tool-assisted reading. Someone who
+/// extracts the key from the binary can open the outer seal — the secrets
+/// inside (`encrypted_uri`, `encrypted_config`) stay protected by the
+/// wizard password's Argon2id key, which is the layer that matters.
+const CONTAINER_SEAL_KEY: [u8; KEY_LEN] = [
+    0x5f, 0x3a, 0x91, 0xc4, 0x1e, 0x77, 0x0b, 0xd2, 0x68, 0xa5, 0x4f, 0x2c, 0xb9, 0x83, 0x16, 0xee,
+    0x70, 0xd8, 0x39, 0x5a, 0xc1, 0x04, 0xe6, 0x9b, 0x27, 0x6f, 0x48, 0xaf, 0x13, 0xd0, 0x85, 0x62,
+];
+
+/// Seal a container payload for disk as `nonce || ciphertext`.
+pub fn seal_container_payload(plaintext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = XChaCha20Poly1305::new(XChaChaKey::from_slice(&CONTAINER_SEAL_KEY));
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    AeadOsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = XChaChaNonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| ConfigError::Encryption(e.to_string()))?;
+
+    let mut sealed = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    sealed.extend_from_slice(&nonce_bytes);
+    sealed.extend_from_slice(&ciphertext);
+    Ok(sealed)
+}
+
+/// Open a payload written by [`seal_container_payload`].
+pub fn open_container_payload(sealed: &[u8]) -> Result<Vec<u8>> {
+    if sealed.len() < NONCE_LEN {
+        return Err(ConfigError::Decryption(
+            "sealed payload is truncated".into(),
+        ));
+    }
+    let cipher = XChaCha20Poly1305::new(XChaChaKey::from_slice(&CONTAINER_SEAL_KEY));
+    let (nonce_bytes, ciphertext) = sealed.split_at(NONCE_LEN);
+    let nonce = XChaChaNonce::from_slice(nonce_bytes);
+
+    cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| ConfigError::Decryption(e.to_string()))
+}
+
 /// Create a new SetupConfig from step inputs
 pub fn create_setup_config(step1: &Step1Input, step2: &Step2Input) -> Result<SetupConfig> {
     // Manual validation (replaces validator::Validate derive)

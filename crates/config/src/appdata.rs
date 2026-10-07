@@ -1,5 +1,6 @@
 use crate::{
     EncryptedPayload, KdfParams, SensitiveData, SetupConfig, decrypt_value, encrypt_value,
+    open_container_payload, seal_container_payload,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,8 +17,9 @@ pub struct ConnectionStore {
 }
 
 /// Binary-dir storage: the MongoDB URI encrypted under the wizard password
-/// (cheap local KDF). One half of the `config.tfs` bundle — the plaintext
-/// password only ever lives in appdata `data.tfs`.
+/// (cheap local KDF). One half of the `config.tfs` bundle — the wizard
+/// password itself lives in appdata `data.tfs`, sealed under this binary's
+/// container key (it cannot encrypt itself).
 #[derive(Debug, Serialize, Deserialize)]
 struct MongoStore {
     kdf: KdfParams,
@@ -85,7 +87,8 @@ pub fn get_bin_dir() -> PathBuf {
 }
 
 /// appdata/data.tfs — the wizard password (user dir). The root secret: it
-/// cannot encrypt itself, so its payload is the raw password bytes.
+/// cannot encrypt itself with its own password, so its payload is the raw
+/// password bytes — sealed under the binary's container key instead.
 fn password_file_path() -> PathBuf {
     get_data_dir().join("data.tfs")
 }
@@ -98,15 +101,22 @@ fn config_file_path() -> PathBuf {
 
 /// Opaque container framing shared by `data.tfs` and `config.tfs`:
 /// `magic | version | reserved | payload_len (u32 LE) | payload`.
-/// Text editors see binary; only this module's layout knows where the
-/// payload starts and how long it is.
+///
+/// v2 seals `payload` as `nonce || ciphertext` under this binary's key, so a
+/// text editor shows random bytes and only this build can open the file. v1
+/// carried the payload in the clear and is still readable, but any v1 file is
+/// rewritten sealed the first time this build touches it.
 const CONTAINER_MAGIC: &[u8; 4] = b"TFSC";
-const CONTAINER_VERSION: u8 = 1;
+const CONTAINER_VERSION: u8 = 2;
+const CONTAINER_VERSION_LEGACY: u8 = 1;
 const CONTAINER_HEADER_LEN: usize = 12;
 
 /// Read a container file. `Ok(None)` when the file is missing, truncated,
-/// or not a container this build understands — callers treat that as
-/// "not saved" so the wizard restarts instead of failing hard.
+/// tampered with, or not a container this build understands — callers treat
+/// that as "not saved" so the wizard restarts instead of failing hard.
+///
+/// A legacy (v1) file is re-sealed in place as a side effect, so a plaintext
+/// `.tfs` stops being readable the first time this build reads it.
 fn read_container(path: &Path) -> anyhow::Result<Option<Vec<u8>>> {
     if !path.exists() {
         return Ok(None);
@@ -116,7 +126,15 @@ fn read_container(path: &Path) -> anyhow::Result<Option<Vec<u8>>> {
         eprintln!("tfs storage: {} is truncated, ignoring", path.display());
         return Ok(None);
     }
-    if &raw[0..4] != CONTAINER_MAGIC || raw[4] != CONTAINER_VERSION {
+    if &raw[0..4] != CONTAINER_MAGIC {
+        eprintln!(
+            "tfs storage: {} has an unrecognized format, ignoring",
+            path.display()
+        );
+        return Ok(None);
+    }
+    let version = raw[4];
+    if version != CONTAINER_VERSION && version != CONTAINER_VERSION_LEGACY {
         eprintln!(
             "tfs storage: {} has an unrecognized format, ignoring",
             path.display()
@@ -131,24 +149,42 @@ fn read_container(path: &Path) -> anyhow::Result<Option<Vec<u8>>> {
         );
         return Ok(None);
     }
-    Ok(Some(
-        raw[CONTAINER_HEADER_LEN..CONTAINER_HEADER_LEN + len].to_vec(),
-    ))
+    let payload = &raw[CONTAINER_HEADER_LEN..CONTAINER_HEADER_LEN + len];
+
+    if version == CONTAINER_VERSION_LEGACY {
+        let payload = payload.to_vec();
+        if let Err(e) = write_container(path, &payload) {
+            eprintln!("tfs storage: could not re-seal {}: {e}", path.display());
+        }
+        return Ok(Some(payload));
+    }
+
+    match open_container_payload(payload) {
+        Ok(plaintext) => Ok(Some(plaintext)),
+        Err(e) => {
+            eprintln!(
+                "tfs storage: {} could not be opened ({e}); ignoring",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
 }
 
-/// Write a container file atomically: build the framed buffer, write it to a
-/// sibling temp file (mode 0600 on Unix), then rename over the target so
-/// readers never observe a half-written file. `rename` replaces the target
-/// on both POSIX and Windows.
+/// Write a container file atomically: seal the payload, build the framed
+/// buffer, write it to a sibling temp file (mode 0600 on Unix), then rename
+/// over the target so readers never observe a half-written file. `rename`
+/// replaces the target on both POSIX and Windows.
 fn write_container(path: &Path, payload: &[u8]) -> anyhow::Result<()> {
-    let payload_len = u32::try_from(payload.len())
+    let sealed = seal_container_payload(payload)?;
+    let payload_len = u32::try_from(sealed.len())
         .map_err(|_| anyhow::anyhow!("container payload exceeds 4 GiB"))?;
-    let mut buf = Vec::with_capacity(CONTAINER_HEADER_LEN + payload.len());
+    let mut buf = Vec::with_capacity(CONTAINER_HEADER_LEN + sealed.len());
     buf.extend_from_slice(CONTAINER_MAGIC);
     buf.push(CONTAINER_VERSION);
     buf.extend_from_slice(&[0u8; 3]);
     buf.extend_from_slice(&payload_len.to_le_bytes());
-    buf.extend_from_slice(payload);
+    buf.extend_from_slice(&sealed);
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -245,9 +281,9 @@ pub fn load_connection() -> anyhow::Result<Option<ConnectionStore>> {
     }))
 }
 
-/// Save the connection: password → appdata `data.tfs` (plaintext — the root
-/// secret), MongoDB URI → `config.tfs` encrypted with that password (cheap
-/// local KDF).
+/// Save the connection: password → appdata `data.tfs` (sealed under the
+/// binary's container key — the root secret), MongoDB URI → `config.tfs`
+/// additionally encrypted with that password (cheap local KDF).
 /// Creates parent directories as needed.
 pub fn save_connection(store: &ConnectionStore) -> anyhow::Result<()> {
     let kdf = KdfParams::local();
@@ -415,8 +451,7 @@ mod tests {
         let raw_password = fs::read(password_file_path()).unwrap();
         assert_eq!(&raw_password[0..4], CONTAINER_MAGIC);
 
-        // The root secret sits in the payload as-is (it cannot encrypt
-        // itself) — but behind the binary header.
+        // The root secret reads back out of the sealed container.
         let payload = read_container(&password_file_path()).unwrap().unwrap();
         assert_eq!(payload, store.password.as_bytes());
 
@@ -549,7 +584,12 @@ mod tests {
         // plaintext.
         let raw = fs::read(config_file_path()).unwrap();
         let lossy = String::from_utf8_lossy(&raw);
-        assert!(lossy.contains("encrypted_config"));
+        // Fully opaque: no section names, no field names, no JSON structure —
+        // a text editor sees random bytes and nothing else.
+        assert!(!lossy.contains("encrypted_config"));
+        assert!(!lossy.contains("connection"));
+        assert!(!lossy.contains("api_hash"));
+        // And the secret itself is gone from the file.
         assert!(!lossy.contains("abcdef1234567890"));
         // Mirror lives next to the binary, not in appdata.
         assert!(config_file_path().exists());
@@ -596,6 +636,43 @@ mod tests {
 
         // Idempotent on a missing file.
         delete_local_config().unwrap();
+
+        clear_test_dirs();
+    }
+
+    /// A v1 container (plaintext payload, as older builds wrote it) is read
+    /// correctly and rewritten sealed, so the file stops being readable by a
+    /// text editor the first time this build touches it.
+    #[test]
+    fn test_legacy_container_is_resealed_on_read() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempdir().unwrap();
+        set_test_dirs(temp_dir.path());
+
+        let payload = b"secret-password";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(CONTAINER_MAGIC);
+        buf.push(CONTAINER_VERSION_LEGACY);
+        buf.extend_from_slice(&[0u8; 3]);
+        buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        buf.extend_from_slice(payload);
+        if let Some(parent) = password_file_path().parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(password_file_path(), &buf).unwrap();
+
+        // Reading hands back the plaintext ...
+        let read = read_container(&password_file_path()).unwrap().unwrap();
+        assert_eq!(read, payload);
+
+        // ... and the file on disk is now sealed.
+        let raw = fs::read(password_file_path()).unwrap();
+        assert_eq!(raw[4], CONTAINER_VERSION);
+        assert!(!String::from_utf8_lossy(&raw).contains("secret-password"));
+
+        // Still opens on subsequent reads.
+        let again = read_container(&password_file_path()).unwrap().unwrap();
+        assert_eq!(again, payload);
 
         clear_test_dirs();
     }
