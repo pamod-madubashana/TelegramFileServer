@@ -2,7 +2,7 @@
 name = "tfs-api"
 version = "0.1.0"
 edition = "2024"
-description = "API layer for TelegramFileServer v2 setup wizard"
+description = "API layer for TelegramFileServer v2 — setup wizard, auth, admin, and explorer endpoints"
 license = "MIT OR Apache-2.0"
 
 [dependencies]

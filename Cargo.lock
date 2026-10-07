@@ -3026,6 +3026,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tfs"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tfs-api",
+ "tfs-config",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tfs-api"
 version = "0.1.0"
 dependencies = [
@@ -3100,23 +3117,6 @@ version = "0.1.0"
 [[package]]
 name = "tfs-jobs"
 version = "0.1.0"
-
-[[package]]
-name = "tfs-server"
-version = "2.0.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "serde",
- "serde_json",
- "tfs-api",
- "tfs-config",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "tfs-telegram"

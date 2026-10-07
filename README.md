@@ -124,7 +124,7 @@ cd legacy && chmod +x install.sh && ./install.sh   # systemd service, driven by 
 ```bash
 git checkout v2
 cargo build --workspace
-cargo run -p tfs-server             # setup wizard on http://127.0.0.1:8090
+cargo run -p tfs                   # setup wizard on http://127.0.0.1:8090
 ```
 
 `crates/server` reads `PORT` (default `8090`) and `MONGO_URI` (default

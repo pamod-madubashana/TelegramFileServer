@@ -1,12 +1,12 @@
 [package]
-name = "tfs-server"
+name = "tfs"
 version = "2.0.0"
 edition = "2024"
-description = "TelegramFileServer v2 setup wizard server"
+description = "TelegramFileServer v2 web server — setup wizard, JSON API, and web UI"
 license = "MIT OR Apache-2.0"
 
 [[bin]]
-name = "tfs-server"
+name = "tfs"
 path = "src/main.rs"
 
 [dependencies]
