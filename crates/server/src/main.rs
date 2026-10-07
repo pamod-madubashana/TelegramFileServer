@@ -1,3 +1,8 @@
+// Link as a no-console app so `tfs --headless` starts with no window at all:
+// Windows creates a console window during process creation, before any of our
+// code can hide it. Default mode asks for a console back in `cli::ensure_console`.
+#![windows_subsystem = "windows"]
+
 use axum::{
     Router,
     response::{IntoResponse, Json},
@@ -9,21 +14,39 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use tfs_api::router as api_router;
 
+mod cli;
+mod logging;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Only a bare `--headless` is a background serve, and it is the one path
+    // that must never ask for a console. Everything else (default, --stop,
+    // --help, a typo) needs somewhere to write, so get a console first —
+    // before parse() has anything to print.
+    let background = args.len() == 1 && args[0] == cli::HEADLESS_FLAG;
+    if background {
+        cli::point_stdio_at(&logging::log_path())?;
+    } else {
+        cli::ensure_console();
+    }
+
+    let command = cli::parse(args)?;
+
+    let headless = match command {
+        cli::Command::Stop => {
+            cli::stop(configured_port())?;
+            return Ok(());
+        }
+        cli::Command::Serve { headless } => headless,
+    };
 
     let mongo_uri =
         std::env::var("MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8090);
+    let port = configured_port();
+
+    init_tracing(headless)?;
 
     let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
     let webui_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static/webui");
@@ -54,8 +77,55 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Server listening on http://{}", addr);
-    axum::serve(listener, app).await?;
 
+    // Record the pid only once the port is actually held, so a failed bind
+    // never leaves a pid file pointing at a process that never served.
+    if headless {
+        cli::write_pid(port)?;
+        tracing::info!(
+            "Headless: no window, log at {}",
+            logging::log_path().display()
+        );
+    }
+
+    let serve_result = axum::serve(listener, app).await;
+    if headless {
+        cli::remove_pid(port);
+    }
+    serve_result?;
+
+    Ok(())
+}
+
+fn configured_port() -> u16 {
+    std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8090)
+}
+
+/// Console mode logs to stdout exactly as before; headless logs to
+/// `tfs.log` beside the binary, because there is no console to read. The
+/// file gets no colour codes — an operator `Get-Content`s it raw.
+fn init_tracing(headless: bool) -> anyhow::Result<()> {
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+
+    if headless {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(logging::SharedLog::open()?),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
     Ok(())
 }
 
