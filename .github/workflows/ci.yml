@@ -1,8 +1,10 @@
 name: CI
 
+# Runs exactly once per change: on PR open/update. `push` is intentionally
+# omitted — with it enabled, a single change produced up to three runs (feature
+# branch push, PR event, then post-merge push to v2), and the two Atlas runs
+# raced each other on the shared test database.
 on:
-  push:
-    branches: [v2, 'feat/**']
   pull_request:
     branches: [v2]
   workflow_dispatch:
