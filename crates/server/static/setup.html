@@ -389,7 +389,11 @@ $('#form1').addEventListener('submit', async (e) => {
     setLoading('#btn1', '#spinner1', '#btn1-text', false);
     if (ok) {
         if (data.configured === true) {
-            showDone(data.api_id, data.owner_id, data.bot_count);
+            // Already set up — go straight to the app, exactly as the resume
+            // path does for this condition. (Was `showDone`, which does not
+            // exist: the ReferenceError killed the handler after the button was
+            // reset, so the wizard looked frozen on step 1.)
+            goToMainUI(data.api_id, data.owner_id, data.bot_count);
         } else {
             showStep2();
         }
