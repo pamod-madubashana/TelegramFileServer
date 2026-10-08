@@ -36,8 +36,8 @@ export default function LoginPage() {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<LoginMode>("signin");
   // Registration flow reported by /api/auth/status: "owner" = first-account
-  // bootstrap (username must match the Telegram owner), "invite" = claim a
-  // username an administrator created.
+  // bootstrap (the Telegram owner's username, or the reserved `admin` name),
+  // "invite" = claim a username an administrator created.
   const [registration, setRegistration] =
     useState<RegistrationMode>("invite");
   const [username, setUsername] = useState("");
@@ -221,7 +221,7 @@ export default function LoginPage() {
               <p className="text-muted-foreground">
                 {mode === "register"
                   ? registration === "owner"
-                    ? "Set up the owner account with your Telegram username"
+                    ? "Set up the owner account — your Telegram username, or admin"
                     : "An administrator created your username — set a password to claim it"
                   : "Sign in to your file server"}
               </p>
@@ -243,7 +243,11 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => handleUsernameChange(e.target.value)}
                 error={usernameError}
-                placeholder="Enter your username"
+                placeholder={
+                  mode === "register" && registration === "owner"
+                    ? "Telegram username or admin"
+                    : "Enter your username"
+                }
                 autoComplete="username"
                 disabled={isLoading}
               />

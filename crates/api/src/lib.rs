@@ -4,7 +4,7 @@ use argon2::{
 };
 use axum::{
     Router,
-    extract::{Json, Path, State},
+    extract::{Json, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, patch, post},
@@ -137,6 +137,33 @@ fn validate_password(password: &str) -> Result<(), String> {
         return Err("password must be at least 8 characters".to_string());
     }
     Ok(())
+}
+
+/// Reserved handle for the owner account. The owner may open their account
+/// under either their Telegram username or this name, and may sign in with
+/// either one afterwards — there is only ever one owner account.
+const ADMIN_USERNAME: &str = "admin";
+
+/// Single wording for every failed credential check: a distinct message per
+/// failure mode would tell an attacker which usernames exist.
+const INVALID_CREDENTIALS: &str = "invalid username or password";
+
+/// Is this username the owner's Telegram name or the reserved `admin` handle?
+fn is_owner_signup_username(username: &str, owner_name: &str) -> bool {
+    username.eq_ignore_ascii_case(owner_name) || username.eq_ignore_ascii_case(ADMIN_USERNAME)
+}
+
+/// Is this a valid sign-in handle for an owner account? Either the reserved
+/// `admin` name or the owner's Telegram name — whichever the account was
+/// opened under, the other one still has to work. Compared against the
+/// document we already loaded, so no Telegram lookup runs on a failed login.
+fn is_owner_signin_username(username: &str, owner: &UserDoc) -> bool {
+    username.eq_ignore_ascii_case(ADMIN_USERNAME)
+        || username.eq_ignore_ascii_case(&owner.username)
+        || owner
+            .telegram_username
+            .as_deref()
+            .is_some_and(|tg| username.eq_ignore_ascii_case(tg))
 }
 
 /// Hash password using Argon2id (PHC format) — mirrors tfs-config's private hash_password
@@ -329,6 +356,35 @@ async fn find_user(client: &mongodb::Client, username: &str) -> Result<Option<Us
     Ok(user)
 }
 
+/// The owner account — the bootstrap admin (`created_by: null`).
+/// Matched by field rather than `_id` because the owner may have signed up
+/// under either their Telegram username or the reserved `admin` handle.
+async fn find_owner(client: &mongodb::Client) -> Result<Option<UserDoc>, DbError> {
+    let collection = get_users_collection(client);
+    let user = collection
+        .find_one(doc! { "created_by": null, "role": "admin" })
+        .await?;
+    Ok(user)
+}
+
+/// Move a user document to a new username.
+///
+/// `_id` is immutable in MongoDB, so the account is re-inserted under the
+/// new id and the old document removed. The insert goes first: it is the
+/// operation guarded by the unique index, so a taken username fails the
+/// rename instead of dropping the account. A failure after the insert leaves
+/// the account alive under its new name and is surfaced to the caller.
+async fn rename_user(
+    client: &mongodb::Client,
+    from: &UserDoc,
+    to: &UserDoc,
+) -> Result<(), DbError> {
+    let collection = get_users_collection(client);
+    collection.insert_one(to).await?;
+    collection.delete_one(doc! { "_id": &from.id }).await?;
+    Ok(())
+}
+
 /// All users, sorted by username (admin listing)
 async fn list_users(client: &mongodb::Client) -> Result<Vec<UserDoc>, DbError> {
     let collection = get_users_collection(client);
@@ -377,9 +433,10 @@ struct MeResponse {
 #[derive(Debug, Serialize)]
 struct AuthStatusResponse {
     needs_registration: bool,
-    /// `"owner"` — bootstrap: register with the owner's Telegram username
-    /// (becomes the admin account). `"invite"` — admin exists; invited
-    /// accounts claim their password here, everyone else signs in.
+    /// `"owner"` — bootstrap: register with the owner's Telegram username or
+    /// the reserved `admin` name (becomes the admin account). `"invite"` —
+    /// admin exists; invited accounts claim their password here, everyone
+    /// else signs in.
     registration: &'static str,
 }
 
@@ -587,9 +644,10 @@ async fn auth_register(
     if count_role(&client, "admin").await? == 0 {
         // ===== Owner bootstrap =====
         let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
-        if !input.username.eq_ignore_ascii_case(&owner_name) {
+        if !is_owner_signup_username(&input.username, &owner_name) {
             return Err(ApiError::Forbidden(format!(
-                "username must match the Telegram owner account \"{owner_name}\""
+                "username must match the Telegram owner account \"{owner_name}\" \
+                 (or \"{ADMIN_USERNAME}\")"
             )));
         }
         let kdf = KdfParams::new();
@@ -598,9 +656,18 @@ async fn auth_register(
 
         return match find_user(&client, &input.username).await? {
             None => {
+                // The account keeps the owner's Telegram name when that is what
+                // was typed (the original behaviour), or the reserved `admin`
+                // handle when that was used instead. The Telegram link carries
+                // the real owner identity either way.
+                let username = if input.username.eq_ignore_ascii_case(&owner_name) {
+                    owner_name.clone()
+                } else {
+                    input.username.clone()
+                };
                 let user = UserDoc {
-                    id: owner_name.to_lowercase(),
-                    username: owner_name.clone(),
+                    id: username.to_lowercase(),
+                    username,
                     password_hash: Some(password_hash),
                     role: "admin".to_string(),
                     telegram_user_id: owner_id,
@@ -671,31 +738,31 @@ async fn auth_login(
 ) -> ApiResult<Json<LoginResponse>> {
     let client = state.mongo_client().await?;
 
-    let user = match find_user(&client, &input.username).await? {
+    let found = find_user(&client, &input.username).await?;
+    let user = match found {
         Some(u) => u,
-        None => {
+        // The owner may have opened their account under either name, so the
+        // one they did not use stays a valid handle for it too. Matched off
+        // the stored document — a failed login never triggers a Telegram
+        // lookup, and every miss still returns the same generic error.
+        None => match find_owner(&client).await? {
+            Some(owner) if is_owner_signin_username(&input.username, &owner) => owner,
             // User not found — same error as wrong password (no user enumeration)
-            return Err(ApiError::InvalidInput(
-                "invalid username or password".to_string(),
-            ));
-        }
+            _ => return Err(ApiError::InvalidInput(INVALID_CREDENTIALS.to_string())),
+        },
     };
 
     // Unclaimed invites have no password yet — indistinguishable from a
     // wrong password (no user enumeration).
     let Some(ref stored_hash) = user.password_hash else {
-        return Err(ApiError::InvalidInput(
-            "invalid username or password".to_string(),
-        ));
+        return Err(ApiError::InvalidInput(INVALID_CREDENTIALS.to_string()));
     };
 
     // Verify password
     if !verify_password_phc(&input.password, stored_hash)
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
-        return Err(ApiError::InvalidInput(
-            "invalid username or password".to_string(),
-        ));
+        return Err(ApiError::InvalidInput(INVALID_CREDENTIALS.to_string()));
     }
 
     // Create session
@@ -735,6 +802,210 @@ async fn auth_logout(
     if let Some(token) = extract_bearer_token(&headers) {
         remove_session(&state.sessions, &token);
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ===== Self-service account management =====
+//
+// Accounts are never created without an administrator unlocking the username
+// first — but once created, the holder owns the credentials: they rename and
+// re-password themselves without going through an admin.
+
+#[derive(Debug, Deserialize)]
+struct UsernameAvailableQuery {
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UsernameAvailableResponse {
+    username: String,
+    available: bool,
+    /// Present when `available` is false — the reason to show the user.
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangeUsernameRequest {
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeUsernameResponse {
+    username: String,
+    /// Sessions are keyed by username, so a rename issues a fresh token and
+    /// the client must swap it in for the old one.
+    token: String,
+    telegram_username: Option<String>,
+    telegram_user_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+/// GET /api/auth/username-available?username=…
+///
+/// Usernames are unique (the `_id` is the lowercased name), so a rename has
+/// to check before it commits. Any signed-in account may ask: the only names
+/// this reveals are ones members already see in each other's listings.
+async fn auth_username_available(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<UsernameAvailableQuery>,
+) -> ApiResult<Json<UsernameAvailableResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+
+    let (available, reason) = match validate_username(&query.username) {
+        Err(msg) => (false, Some(msg)),
+        Ok(()) => {
+            let client = state.mongo_client().await?;
+            let me_id = username.to_lowercase();
+            match find_user(&client, &query.username).await? {
+                // Already yours (differing only in case) — nothing to change.
+                Some(existing) if existing.id == me_id => (true, None),
+                Some(_) => (false, Some("username already taken".to_string())),
+                None => (true, None),
+            }
+        }
+    };
+
+    Ok(Json(UsernameAvailableResponse {
+        username: query.username,
+        available,
+        reason,
+    }))
+}
+
+/// POST /api/auth/change-username — rename the signed-in account.
+///
+/// Uniqueness is enforced twice: once by asking here, and again by the insert
+/// that carries the new `_id`, so a name taken between the two still fails
+/// rather than silently colliding.
+async fn auth_change_username(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<ChangeUsernameRequest>,
+) -> ApiResult<Json<ChangeUsernameResponse>> {
+    validate_username(&input.username).map_err(ApiError::Validation)?;
+
+    let old_username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let me = find_user(&client, &old_username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    if me.username.eq_ignore_ascii_case(&input.username) {
+        // Same name, different casing: the session already fits.
+        return Ok(Json(ChangeUsernameResponse {
+            username: me.username,
+            token: extract_bearer_token(&headers).unwrap_or_default(),
+            telegram_username: me.telegram_username,
+            telegram_user_id: me.telegram_user_id,
+        }));
+    }
+
+    if find_user(&client, &input.username).await?.is_some() {
+        return Err(ApiError::Conflict(
+            "that username is already taken".to_string(),
+        ));
+    }
+
+    // The owner's Telegram identity comes from the configured owner account,
+    // not from their login name, so a rename must not drop it. Everyone else
+    // is re-resolved from the new name: not found clears the link, a
+    // connection failure keeps the old one (resync covers it).
+    let (telegram_user_id, telegram_username) = if me.is_owner() {
+        match resolve_owner_identity(&state).await {
+            Ok((owner_id, owner_name)) => (owner_id, Some(owner_name)),
+            Err(e) => {
+                tracing::warn!("owner rename kept its Telegram link: {e}");
+                (me.telegram_user_id, me.telegram_username.clone())
+            }
+        }
+    } else {
+        match resolve_tg_user_id(&state, &input.username).await {
+            Ok(Some(id)) => (Some(id), Some(input.username.clone())),
+            Ok(None) => (None, None),
+            Err(e) => {
+                tracing::warn!("rename of {} kept its Telegram link: {e}", me.username);
+                (me.telegram_user_id, me.telegram_username.clone())
+            }
+        }
+    };
+
+    let renamed = UserDoc {
+        id: input.username.to_lowercase(),
+        username: input.username.clone(),
+        password_hash: me.password_hash.clone(),
+        role: me.role.clone(),
+        telegram_user_id,
+        telegram_username,
+        permissions: me.permissions,
+        created_at: me.created_at,
+        created_by: me.created_by.clone(),
+    };
+
+    if let Err(e) = rename_user(&client, &me, &renamed).await {
+        // Lost the race against another account taking the name.
+        if e.to_string().contains("E11000") {
+            return Err(ApiError::Conflict(
+                "that username is already taken".to_string(),
+            ));
+        }
+        return Err(e.into());
+    }
+
+    // The old token names an account that no longer exists under that
+    // username — drop it and hand back one that does.
+    if let Some(token) = extract_bearer_token(&headers) {
+        remove_session(&state.sessions, &token);
+    }
+    let token = create_session(&state.sessions, renamed.username.clone());
+
+    Ok(Json(ChangeUsernameResponse {
+        username: renamed.username,
+        token,
+        telegram_username: renamed.telegram_username,
+        telegram_user_id: renamed.telegram_user_id,
+    }))
+}
+
+/// POST /api/auth/change-password — re-password the signed-in account.
+///
+/// The current password is required: an unattended session must not be able
+/// to lock the real holder out of their own account.
+async fn auth_change_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<ChangePasswordRequest>,
+) -> ApiResult<StatusCode> {
+    validate_password(&input.new_password).map_err(ApiError::Validation)?;
+
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    let Some(ref stored_hash) = user.password_hash else {
+        return Err(ApiError::InvalidInput(
+            "this account has no password yet — claim it by registering".to_string(),
+        ));
+    };
+    if !verify_password_phc(&input.current_password, stored_hash)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        return Err(ApiError::InvalidInput(
+            "current password is incorrect".to_string(),
+        ));
+    }
+
+    let kdf = KdfParams::new();
+    let password_hash = hash_password_phc(&input.new_password, &kdf)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    set_password(&client, &user.id, password_hash).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1515,6 +1786,9 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/username-available", get(auth_username_available))
+        .route("/api/auth/change-username", post(auth_change_username))
+        .route("/api/auth/change-password", post(auth_change_password))
         .route(
             "/api/admin/users",
             get(admin_list_users).post(admin_create_user),
@@ -2468,5 +2742,306 @@ mod tests {
         assert_eq!(list.0.users.len(), 1);
         assert_eq!(list.0.users[0].username, "testuser");
         assert!(list.0.users[0].is_owner);
+    }
+
+    /// Owner bootstrap under the reserved `admin` handle, the two-way owner
+    /// sign-in alias, and the self-service availability / rename / re-password
+    /// endpoints — the whole path a member walks without an admin in the loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn test_self_service_account_settings() {
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+        get_users_collection(&client)
+            .delete_many(doc! {})
+            .await
+            .unwrap();
+
+        let state = test_state(&uri);
+
+        // 1. Owner opens the account under the reserved `admin` handle.
+        let reg = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "admin".to_string(),
+                password: "owner-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(reg.0.ok);
+        assert_eq!(reg.0.username, "admin");
+
+        let owner = find_user(&client, "admin").await.unwrap().unwrap();
+        assert!(owner.is_owner());
+        // The Telegram link keeps the real owner identity — not the handle the
+        // account happened to be opened under.
+        assert_eq!(owner.telegram_username.as_deref(), Some("testuser"));
+        assert_eq!(owner.telegram_user_id, Some(999999));
+
+        // 2. Both handles sign in to the same account.
+        let via_admin = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "admin".to_string(),
+                password: "owner-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(via_admin.0.username, "admin");
+
+        let via_tg = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "TestUser".to_string(),
+                password: "owner-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(via_tg.0.username, "admin");
+
+        // 3. An unknown username is indistinguishable from a bad password —
+        //    the owner alias must not turn a miss into a different error.
+        let bogus = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "nobody".to_string(),
+                password: "owner-pass-123".to_string(),
+            }),
+        )
+        .await;
+        match bogus.unwrap_err() {
+            ApiError::InvalidInput(msg) => assert_eq!(msg, INVALID_CREDENTIALS),
+            e => panic!("expected InvalidInput, got {e:?}"),
+        }
+
+        // 4. The owner unlocks a username — the invite flow, unchanged.
+        let owner_headers = bearer(&via_admin.0.token);
+        let (code, created) = admin_create_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Json(AdminCreateUserRequest {
+                username: "alice".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CREATED);
+        assert_eq!(created.0.created_by.as_deref(), Some("admin"));
+
+        // 5. Availability: taken by someone else, free, and malformed.
+        let taken = auth_username_available(
+            State(state.clone()),
+            owner_headers.clone(),
+            Query(UsernameAvailableQuery {
+                username: "alice".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(!taken.0.available);
+        assert_eq!(taken.0.reason.as_deref(), Some("username already taken"));
+
+        let free = auth_username_available(
+            State(state.clone()),
+            owner_headers.clone(),
+            Query(UsernameAvailableQuery {
+                username: "bob".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(free.0.available);
+        assert!(free.0.reason.is_none());
+
+        let malformed = auth_username_available(
+            State(state.clone()),
+            owner_headers.clone(),
+            Query(UsernameAvailableQuery {
+                username: "x".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(!malformed.0.available);
+        assert!(malformed.0.reason.is_some());
+
+        // Asking requires a session.
+        assert!(
+            auth_username_available(
+                State(state.clone()),
+                HeaderMap::new(),
+                Query(UsernameAvailableQuery {
+                    username: "bob".to_string(),
+                }),
+            )
+            .await
+            .is_err()
+        );
+
+        // 6. Alice claims the unlocked username by setting her password.
+        let _ = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "alice".to_string(),
+                password: "alice-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let alice_login = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "alice".to_string(),
+                password: "alice-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let alice_headers = bearer(&alice_login.0.token);
+
+        // 7. Alice renames herself to a free username.
+        let renamed = auth_change_username(
+            State(state.clone()),
+            alice_headers.clone(),
+            Json(ChangeUsernameRequest {
+                username: "alicia".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.0.username, "alicia");
+        assert_ne!(renamed.0.token, alice_login.0.token);
+
+        // The old token names an account that no longer lives under that
+        // username, so it must have been dropped...
+        assert!(
+            auth_me(State(state.clone()), alice_headers.clone())
+                .await
+                .is_err()
+        );
+        // ...and the replacement carries the new name.
+        let me = auth_me(State(state.clone()), bearer(&renamed.0.token))
+            .await
+            .unwrap();
+        assert_eq!(me.0.username, "alicia");
+        assert_eq!(me.0.role, "user");
+
+        // The document moved: old id gone, new id present.
+        assert!(find_user(&client, "alice").await.unwrap().is_none());
+        assert!(find_user(&client, "alicia").await.unwrap().is_some());
+
+        // 8. Renaming onto a taken username is refused and leaves the account
+        //    exactly where it was.
+        let clash = auth_change_username(
+            State(state.clone()),
+            bearer(&renamed.0.token),
+            Json(ChangeUsernameRequest {
+                username: "admin".to_string(),
+            }),
+        )
+        .await;
+        match clash.unwrap_err() {
+            ApiError::Conflict(_) => {}
+            e => panic!("expected Conflict, got {e:?}"),
+        }
+        assert!(find_user(&client, "alicia").await.unwrap().is_some());
+
+        // 9. Re-password: wrong current refused, weak new refused, then the
+        //    real swap — old password stops working, new one starts.
+        let alicia_headers = bearer(&renamed.0.token);
+        let wrong = auth_change_password(
+            State(state.clone()),
+            alicia_headers.clone(),
+            Json(ChangePasswordRequest {
+                current_password: "not-the-one".to_string(),
+                new_password: "new-pass-456".to_string(),
+            }),
+        )
+        .await;
+        match wrong.unwrap_err() {
+            ApiError::InvalidInput(_) => {}
+            e => panic!("expected InvalidInput, got {e:?}"),
+        }
+
+        let weak = auth_change_password(
+            State(state.clone()),
+            alicia_headers.clone(),
+            Json(ChangePasswordRequest {
+                current_password: "alice-pass-123".to_string(),
+                new_password: "short".to_string(),
+            }),
+        )
+        .await;
+        assert!(matches!(weak.unwrap_err(), ApiError::Validation(_)));
+
+        let changed = auth_change_password(
+            State(state.clone()),
+            alicia_headers.clone(),
+            Json(ChangePasswordRequest {
+                current_password: "alice-pass-123".to_string(),
+                new_password: "new-pass-456".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed, StatusCode::NO_CONTENT);
+
+        assert!(
+            auth_login(
+                State(state.clone()),
+                Json(LoginRequest {
+                    username: "alicia".to_string(),
+                    password: "alice-pass-123".to_string(),
+                }),
+            )
+            .await
+            .is_err()
+        );
+        let _ = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "alicia".to_string(),
+                password: "new-pass-456".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // 10. The owner renames too: the Telegram link survives, because the
+        //     configured owner account — not the login name — owns it, and the
+        //     `admin` alias still resolves to the renamed account.
+        let owner_renamed = auth_change_username(
+            State(state.clone()),
+            owner_headers.clone(),
+            Json(ChangeUsernameRequest {
+                username: "boss".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(owner_renamed.0.username, "boss");
+        assert_eq!(
+            owner_renamed.0.telegram_username.as_deref(),
+            Some("testuser")
+        );
+        assert_eq!(owner_renamed.0.telegram_user_id, Some(999999));
+
+        let boss = find_user(&client, "boss").await.unwrap().unwrap();
+        assert!(boss.is_owner());
+        assert_eq!(boss.telegram_username.as_deref(), Some("testuser"));
+
+        let still_admin = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "admin".to_string(),
+                password: "owner-pass-123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(still_admin.0.username, "boss");
     }
 }

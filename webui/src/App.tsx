@@ -59,6 +59,9 @@ const AppearanceSettingsPage = lazy(
 const AdminUsersPage = lazy(
   () => import("./pages/settings/AdminUsersPage"),
 );
+const AccountSettingsPage = lazy(
+  () => import("./pages/settings/AccountSettingsPage"),
+);
 const AboutSettingsPage = lazy(
   () => import("./pages/settings/AboutSettingsPage"),
 );
@@ -342,6 +345,14 @@ const App = () => {
             element: (
               <RouteSuspense>
                 <AppearanceSettingsPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "account",
+            element: (
+              <RouteSuspense>
+                <AccountSettingsPage />
               </RouteSuspense>
             ),
           },

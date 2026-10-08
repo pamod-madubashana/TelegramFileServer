@@ -109,10 +109,62 @@ export async function apiJson<T>(
 /** GET /api/auth/status — registration mode for the login screen. */
 export const fetchAuthStatus = (): Promise<AuthStatusResponse> =>
   apiJson<AuthStatusResponse>("/api/auth/status");
-
 /** GET /api/auth/me — current session profile (role + permissions). */
 export const fetchMe = (): Promise<MeResponse> =>
   apiJson<MeResponse>("/api/auth/me");
+
+// ===== Self-service account settings =====
+
+/** GET /api/auth/username-available?username= — is that name still free? */
+export interface UsernameAvailableResponse {
+  username: string;
+  available: boolean;
+  /** Set when `available` is false — the reason to show the user. */
+  reason: string | null;
+}
+
+/** POST /api/auth/change-username result. */
+export interface ChangeUsernameResponse {
+  username: string;
+  /**
+   * Sessions are keyed by username, so a rename hands back a replacement
+   * token — the client must swap it in for the old one.
+   */
+  token: string;
+  telegram_username: string | null;
+  telegram_user_id: number | null;
+}
+
+/**
+ * Is `username` free to take? Requires a session — this is the check a
+ * rename runs before committing.
+ */
+export const checkUsernameAvailable = (
+  username: string,
+): Promise<UsernameAvailableResponse> =>
+  apiJson<UsernameAvailableResponse>(
+    `/api/auth/username-available?username=${encodeURIComponent(username)}`,
+  );
+
+/** Rename the signed-in account; resolves the replacement session token. */
+export const changeUsername = (
+  username: string,
+): Promise<ChangeUsernameResponse> =>
+  apiJson<ChangeUsernameResponse>("/api/auth/change-username", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+
+/** Re-password the signed-in account. Resolves to `undefined` on 204. */
+export const changePassword = (
+  current_password: string,
+  new_password: string,
+): Promise<void> =>
+  apiJson<void>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+
 
 /**
  * True when an error from `/api/auth/me` means "no usable session"

@@ -5,6 +5,7 @@ import {
   HardDrive,
   Monitor,
   Palette,
+  User,
   Users,
 } from "lucide-react";
 import type { ElementType } from "react";
@@ -56,6 +57,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Appearance",
     icon: Palette,
     to: "/settings/appearance",
+  },
+  {
+    id: "account",
+    label: "Account",
+    icon: User,
+    to: "/settings/account",
   },
   {
     id: "admin",
