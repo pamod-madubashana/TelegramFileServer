@@ -11,8 +11,11 @@ use grammers_client::{
     message::{InputMessage, Message},
 };
 use grammers_session::storages::SqliteSession;
+use grammers_session::updates::UpdatesLike;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tracing::info;
 
 use crate::error::{Result, TelegramError};
 use crate::types::{
@@ -121,6 +124,14 @@ pub struct GrammersClient {
     api_hash: String,
     bot_token: Option<String>,
     connected: bool,
+    /// Task driving the sender-pool I/O loop; quit via [`TelegramClient::disconnect`].
+    runner: Option<tokio::task::JoinHandle<()>>,
+    /// Thin handle used to gracefully quit the runner on disconnect.
+    quit_handle: Option<grammers_client::sender::SenderPoolHandle>,
+    /// Updates channel produced by the sender pool; taken by update consumers (claim listener).
+    updates: Option<mpsc::UnboundedReceiver<UpdatesLike>>,
+    /// Bot username learned at sign-in time (bots only; `None` for user sessions).
+    bot_username: Option<String>,
 }
 
 impl GrammersClient {
@@ -139,6 +150,10 @@ impl GrammersClient {
             api_hash,
             bot_token: Some(bot_token),
             connected: false,
+            runner: None,
+            quit_handle: None,
+            updates: None,
+            bot_username: None,
         }
     }
 
@@ -156,6 +171,10 @@ impl GrammersClient {
             api_hash,
             bot_token: None,
             connected: false,
+            runner: None,
+            quit_handle: None,
+            updates: None,
+            bot_username: None,
         }
     }
 
@@ -173,6 +192,20 @@ impl GrammersClient {
     /// Get mutable reference to the underlying client
     pub fn inner_mut(&mut self) -> Option<&mut Client> {
         self.client.as_mut()
+    }
+
+    /// Take the updates receiver produced by the sender pool at connect time.
+    ///
+    /// This is a one-shot accessor: the receiver is moved out so it can be fed
+    /// to [`Client::stream_updates`] (grammers requires a single sequential
+    /// consumer). Returns `None` if not connected or already taken.
+    pub fn take_updates(&mut self) -> Option<mpsc::UnboundedReceiver<UpdatesLike>> {
+        self.updates.take()
+    }
+
+    /// The bot username learned at sign-in time, if any.
+    pub fn bot_username(&self) -> Option<&str> {
+        self.bot_username.as_deref()
     }
 
     async fn ensure_connected(&self) -> Result<&Client> {
@@ -337,14 +370,39 @@ impl TelegramClient for GrammersClient {
                 .map_err(|e| TelegramError::Session(format!("Failed to create session: {}", e)))?
         };
 
-        // Create SenderPool and Client
+        // Create SenderPool and Client. The runner must be spawned: it is the
+        // single task that drives all network I/O for the pool. Dropping it
+        // without spawning closes the request channel and every invoke fails
+        // with InvocationError::Dropped.
         let pool = SenderPool::new(Arc::new(session), self.api_id);
-        let client = Client::with_configuration(pool.handle, ClientConfiguration::default());
+        let runner = tokio::spawn(pool.runner.run());
+        let client =
+            Client::with_configuration(pool.handle.clone(), ClientConfiguration::default());
 
         // Authenticate
         if let Some(bot_token) = &self.bot_token {
             // Bot authentication
             client.bot_sign_in(bot_token, &self.api_hash).await?;
+
+            // Learn the bot's username so callers can build t.me deep links.
+            match client.get_me().await {
+                Ok(me) => {
+                    if let Some(username) = me.username() {
+                        info!(bot_username = %username, "claim bot signed in");
+                        self.bot_username = Some(username.to_string());
+                    } else {
+                        return Err(TelegramError::Auth(
+                            "bot account has no @username; set one in @BotFather".into(),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(TelegramError::Other(format!(
+                        "signed in but could not fetch bot identity: {}",
+                        e
+                    )));
+                }
+            }
         } else {
             // User authentication - would need phone/code or string session
             // For PoC, we only support bot token
@@ -354,6 +412,9 @@ impl TelegramClient for GrammersClient {
         }
 
         self.client = Some(client);
+        self.quit_handle = Some(pool.handle.thin);
+        self.updates = Some(pool.updates);
+        self.runner = Some(runner);
         self.connected = true;
 
         // Session is auto-saved by SqliteSession
@@ -362,9 +423,20 @@ impl TelegramClient for GrammersClient {
 
     async fn disconnect(&mut self) -> Result<()> {
         if let Some(client) = self.client.take() {
+            // Client::disconnect sends Request::Quit through the thin handle,
+            // which gracefully stops the runner task.
             client.disconnect();
-            self.connected = false;
         }
+        if let Some(handle) = self.quit_handle.take() {
+            handle.quit();
+        }
+        if let Some(runner) = self.runner.take() {
+            // Give the runner a moment to wind down; it exits on Quit.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), runner).await;
+        }
+        self.updates = None;
+        self.bot_username = None;
+        self.connected = false;
         Ok(())
     }
 

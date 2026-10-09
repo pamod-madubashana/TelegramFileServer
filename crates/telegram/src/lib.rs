@@ -20,6 +20,7 @@
 //! - FloodWait retry with backoff
 //! - Multi-bot pool: least-busy routing that starts a second bot under load
 
+pub mod claim;
 pub mod client;
 pub mod engine;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod lookup;
 pub mod pool;
 pub mod types;
 
+pub use claim::{ClaimBot, ClaimStartEvent, claim_bot_session_path, parse_start_secret};
 pub use client::{GrammersClient, TelegramClient};
 pub use engine::TransferEngine;
 pub use error::{Result, TelegramError};

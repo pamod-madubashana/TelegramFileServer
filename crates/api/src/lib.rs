@@ -40,7 +40,7 @@ use tfs_config::{
 };
 use tfs_db::{DbError, connect, has_config, load_config, save_config};
 use tfs_telegram::{
-    BotPool, CancellationToken, DownloadRange, GrammersClient, MediaType, TelegramClient,
+    BotPool, CancellationToken, ClaimBot, DownloadRange, GrammersClient, MediaType, TelegramClient,
     TelegramError, TransferEngine, lookup as tg_lookup,
 };
 use thiserror::Error;
@@ -51,13 +51,25 @@ mod files;
 
 /// Validate Step1Input manually (mirrors tfs-config validation)
 fn validate_step1(input: &Step1Input) -> Result<(), String> {
-    if input.mongo_uri.is_empty() {
-        return Err("MongoDB URI is required".to_string());
-    }
+    validate_mongo_uri(&input.mongo_uri)?;
     if input.password.len() < 8 {
         return Err("Password must be at least 8 characters".to_string());
     }
     Ok(())
+}
+
+/// A MongoDB URI is always supplied by the operator — there is no local
+/// default to fall back on — so reject anything that is not one before
+/// the wizard stores it in config.tfs.
+fn validate_mongo_uri(uri: &str) -> Result<(), String> {
+    if uri.trim().is_empty() {
+        return Err("MongoDB URI is required".to_string());
+    }
+    let lower = uri.trim().to_ascii_lowercase();
+    if lower.starts_with("mongodb://") || lower.starts_with("mongodb+srv://") {
+        return Ok(());
+    }
+    Err("MongoDB URI must start with mongodb+srv:// (cloud) or mongodb://".to_string())
 }
 
 /// Session token length in bytes (32 bytes = 64 hex chars)
@@ -108,6 +120,69 @@ fn create_session(store: &SessionStore, username: String) -> String {
 fn remove_session(store: &SessionStore, token: &str) {
     let mut sessions = store.lock().unwrap();
     sessions.remove(token);
+}
+
+// ===== Owner claim flow =====
+//
+// First-run registration asks for a username only. If it matches the owner's
+// Telegram name, the server issues a one-time secret and a t.me deep link;
+// a dedicated claim bot watches for `/start <secret>` and marks the claim
+// verified once the configured owner's Telegram account sends it. The web UI
+// polls the claim, then the owner sets a password and the account is created.
+
+/// Claim secrets expire this long after they are issued.
+const CLAIM_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Secret payload length in bytes (16 bytes -> 32 hex chars; the `/start`
+/// deep-link payload limit is 64 characters).
+const CLAIM_SECRET_BYTES: usize = 16;
+
+/// Generate a one-time claim secret (32 hex chars).
+fn generate_claim_secret() -> String {
+    let mut bytes = [0u8; CLAIM_SECRET_BYTES];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+/// One pending (or completed) account claim — the shared shape of the
+/// username → verify → password flow for every new account.
+struct ClaimEntry {
+    username: String,
+    created: Instant,
+    /// The claim is verified once a `/start <secret>` arrives from the
+    /// bound sender (or any Telegram user when the binding is `None`).
+    verified: bool,
+    /// Telegram user id that must send `/start`: the configured owner for an
+    /// owner bootstrap, the invitee resolved at invite time, or `None` when
+    /// no identity is known (dev override / unresolvable invite) — any
+    /// Telegram user may then verify.
+    expected_sender: Option<i64>,
+    /// Who actually verified (set when `verified` flips true).
+    verified_by: Option<i64>,
+    /// The verifier's public @username, when their profile exposed one.
+    verified_username: Option<String>,
+}
+
+impl ClaimEntry {
+    fn new(username: String, expected_sender: Option<i64>) -> Self {
+        Self {
+            username,
+            created: Instant::now(),
+            verified: false,
+            expected_sender,
+            verified_by: None,
+            verified_username: None,
+        }
+    }
+}
+
+/// In-memory claim store: secret -> entry. Secrets are single-use.
+type ClaimStore = Arc<Mutex<HashMap<String, ClaimEntry>>>;
+
+/// Handle to the lazily-started claim bot (its @username builds deep links).
+#[derive(Clone)]
+struct ClaimBotHandle {
+    bot_username: String,
 }
 
 /// Extract Bearer token from Authorization header
@@ -683,62 +758,15 @@ async fn auth_register(
         let kdf = KdfParams::new();
         let password_hash = hash_password_phc(&input.password, &kdf)
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-        return match find_user(&client, &input.username).await? {
-            None => {
-                // The account keeps the owner's Telegram name when that is what
-                // was typed (the original behaviour), or the reserved `admin`
-                // handle when that was used instead. The Telegram link carries
-                // the real owner identity either way.
-                let username = if input.username.eq_ignore_ascii_case(&owner_name) {
-                    owner_name.clone()
-                } else {
-                    input.username.clone()
-                };
-                let user = UserDoc {
-                    id: username.to_lowercase(),
-                    username,
-                    password_hash: Some(password_hash),
-                    role: "admin".to_string(),
-                    telegram_user_id: owner_id,
-                    telegram_username: Some(owner_name.clone()),
-                    permissions: default_permissions(),
-                    storage_chat_id: None,
-                    created_at: chrono::Utc::now(),
-                    created_by: None,
-                };
-                match insert_user(&client, &user).await {
-                    Ok(()) => {}
-                    Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
-                        return Err(ApiError::Conflict(
-                            "username already exists — sign in instead".to_string(),
-                        ));
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-                Ok(Json(RegisterResponse {
-                    ok: true,
-                    username: user.username,
-                }))
-            }
-            Some(existing) if existing.claimed() => {
-                // Account already registered under the owner's name (legacy
-                // test data): promote it to owner and ask them to sign in.
-                promote_to_owner(&client, &existing.id, owner_id, &owner_name).await?;
-                Err(ApiError::Conflict(
-                    "account already registered — sign in instead".to_string(),
-                ))
-            }
-            Some(existing) => {
-                // Owner invite sitting unclaimed: set password + promote.
-                set_password(&client, &existing.id, password_hash).await?;
-                promote_to_owner(&client, &existing.id, owner_id, &owner_name).await?;
-                Ok(Json(RegisterResponse {
-                    ok: true,
-                    username: existing.username,
-                }))
-            }
-        };
+        let username = bootstrap_owner_account(
+            &client,
+            owner_id,
+            &owner_name,
+            &input.username,
+            password_hash,
+        )
+        .await?;
+        return Ok(Json(RegisterResponse { ok: true, username }));
     }
 
     // ===== Invited users: claim a username an admin created =====
@@ -760,6 +788,67 @@ async fn auth_register(
         ok: true,
         username: existing.username,
     }))
+}
+
+/// Create or self-heal the owner account under the typed username.
+/// Shared by the register and claim-confirm owner-bootstrap paths; returns
+/// the username the account now lives under.
+async fn bootstrap_owner_account(
+    client: &mongodb::Client,
+    owner_id: Option<i64>,
+    owner_name: &str,
+    typed_username: &str,
+    password_hash: String,
+) -> ApiResult<String> {
+    match find_user(client, typed_username).await? {
+        None => {
+            // The account keeps the owner's Telegram name when that is what
+            // was typed (the original behaviour), or the reserved `admin`
+            // handle when that was used instead. The Telegram link carries
+            // the real owner identity either way.
+            let username = if typed_username.eq_ignore_ascii_case(owner_name) {
+                owner_name.to_string()
+            } else {
+                typed_username.to_string()
+            };
+            let user = UserDoc {
+                id: username.to_lowercase(),
+                username,
+                password_hash: Some(password_hash),
+                role: "admin".to_string(),
+                telegram_user_id: owner_id,
+                telegram_username: Some(owner_name.to_string()),
+                permissions: default_permissions(),
+                storage_chat_id: None,
+                created_at: chrono::Utc::now(),
+                created_by: None,
+            };
+            match insert_user(client, &user).await {
+                Ok(()) => {}
+                Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
+                    return Err(ApiError::Conflict(
+                        "username already exists — sign in instead".to_string(),
+                    ));
+                }
+                Err(e) => return Err(e.into()),
+            }
+            Ok(user.username)
+        }
+        Some(existing) if existing.claimed() => {
+            // Account already registered under the owner's name (legacy
+            // test data): promote it to owner and ask them to sign in.
+            promote_to_owner(client, &existing.id, owner_id, owner_name).await?;
+            Err(ApiError::Conflict(
+                "account already registered — sign in instead".to_string(),
+            ))
+        }
+        Some(existing) => {
+            // Owner invite sitting unclaimed: set password + promote.
+            set_password(client, &existing.id, password_hash).await?;
+            promote_to_owner(client, &existing.id, owner_id, owner_name).await?;
+            Ok(existing.username)
+        }
+    }
 }
 
 /// POST /api/auth/login
@@ -834,6 +923,280 @@ async fn auth_logout(
         remove_session(&state.sessions, &token);
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ===== Owner claim endpoints (Telegram-verified bootstrap) =====
+
+#[derive(Debug, Deserialize)]
+struct ClaimStartRequest {
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimStartResponse {
+    username: String,
+    secret: String,
+    deep_link: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimStatusResponse {
+    /// `"pending" | "verified" | "expired" | "unknown"`.
+    status: &'static str,
+    username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaimConfirmRequest {
+    secret: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimConfirmResponse {
+    token: String,
+    username: String,
+}
+
+/// GET /api/auth/claim/available?username=… — unauthenticated gate for the
+/// create screen: the Create Account button stays disabled until the name is
+/// claimable, so users learn the problem before opening Telegram.
+#[derive(Debug, Deserialize)]
+struct ClaimAvailableQuery {
+    username: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimAvailableResponse {
+    username: String,
+    available: bool,
+    /// Present when `available` is false — the reason to show the user.
+    reason: Option<String>,
+}
+
+/// POST /api/auth/claim/start — issue a one-time secret + deep link.
+///
+/// The same entry point serves both modes:
+/// - No admin yet (owner bootstrap): the username must match the owner's
+///   Telegram name (or `admin`); verification is bound to the owner's id.
+/// - Admin exists: only an administrator-created, still-unclaimed username
+///   may start; verification is bound to the Telegram id resolved at invite
+///   time (any Telegram user when the invite carries none).
+async fn claim_start(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<ClaimStartRequest>,
+) -> ApiResult<Json<ClaimStartResponse>> {
+    validate_username(&input.username).map_err(ApiError::Validation)?;
+
+    let client = state.mongo_client().await?;
+    let expected_sender = if count_role(&client, "admin").await? == 0 {
+        // ===== Owner bootstrap =====
+        let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
+        if !is_owner_signup_username(&input.username, &owner_name) {
+            return Err(ApiError::Forbidden(format!(
+                "username must match the Telegram owner account \"{owner_name}\" \
+                 (or \"{ADMIN_USERNAME}\")"
+            )));
+        }
+        if let Some(existing) = find_user(&client, &input.username).await?
+            && existing.claimed()
+        {
+            return Err(ApiError::Conflict(
+                "account already registered — sign in instead".to_string(),
+            ));
+        }
+        owner_id
+    } else {
+        // ===== Invited users: the name must exist and still be unclaimed =====
+        let Some(existing) = find_user(&client, &input.username).await? else {
+            return Err(ApiError::Forbidden(
+                "registration closed — ask an administrator to create your account".to_string(),
+            ));
+        };
+        if existing.claimed() {
+            return Err(ApiError::Conflict(
+                "account already registered — sign in instead".to_string(),
+            ));
+        }
+        existing.telegram_user_id
+    };
+
+    let handle = state.ensure_claim_bot().await?;
+    let secret = generate_claim_secret();
+    state.claims.lock().unwrap().insert(
+        secret.clone(),
+        ClaimEntry::new(input.username.clone(), expected_sender),
+    );
+    tracing::info!(username = %input.username, ?expected_sender, "account claim started");
+    Ok(Json(ClaimStartResponse {
+        username: input.username,
+        deep_link: format!("https://t.me/{}?start={}", handle.bot_username, secret),
+        secret,
+    }))
+}
+
+/// GET /api/auth/claim/status/:secret — polled by the web UI while waiting
+/// for the owner to tap the deep link in Telegram.
+async fn claim_status(
+    State(state): State<Arc<AppState>>,
+    Path(secret): Path<String>,
+) -> ApiResult<Json<ClaimStatusResponse>> {
+    let mut claims = state.claims.lock().unwrap();
+    let now = Instant::now();
+    // An expired secret is indistinguishable from an unknown one from here
+    // on: purge it so the store does not grow without bound.
+    claims.retain(|_, entry| now.duration_since(entry.created) < CLAIM_TTL);
+    match claims.get(&secret) {
+        None => Ok(Json(ClaimStatusResponse {
+            status: "unknown",
+            username: None,
+        })),
+        Some(entry) => Ok(Json(ClaimStatusResponse {
+            status: if entry.verified {
+                "verified"
+            } else {
+                "pending"
+            },
+            username: Some(entry.username.clone()),
+        })),
+    }
+}
+
+/// POST /api/auth/claim/confirm — create the owner account once the claim
+/// has been verified in Telegram. Returns a session token so the web UI can
+/// continue without a second round trip.
+async fn claim_confirm(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<ClaimConfirmRequest>,
+) -> ApiResult<Json<ClaimConfirmResponse>> {
+    validate_password(&input.password).map_err(ApiError::Validation)?;
+
+    // Consume the claim only if it is verified and unexpired.
+    let claim = {
+        let mut claims = state.claims.lock().unwrap();
+        let now = Instant::now();
+        claims.retain(|_, entry| now.duration_since(entry.created) < CLAIM_TTL);
+        match claims.get(&input.secret) {
+            None => {
+                return Err(ApiError::Forbidden(
+                    "claim expired or unknown — start again".to_string(),
+                ));
+            }
+            Some(entry) if !entry.verified => {
+                return Err(ApiError::Forbidden(
+                    "not verified in Telegram yet — open the claim link first".to_string(),
+                ));
+            }
+            Some(_) => claims.remove(&input.secret).expect("entry just checked"),
+        }
+    };
+
+    let client = state.mongo_client().await?;
+    let kdf = KdfParams::new();
+    let password_hash =
+        hash_password_phc(&input.password, &kdf).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let username = if count_role(&client, "admin").await? == 0 {
+        // ===== Owner bootstrap =====
+        let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
+        bootstrap_owner_account(
+            &client,
+            owner_id,
+            &owner_name,
+            &claim.username,
+            password_hash,
+        )
+        .await?
+    } else {
+        // ===== Invited users: the admin pre-created this name =====
+        let Some(existing) = find_user(&client, &claim.username).await? else {
+            return Err(ApiError::Forbidden(
+                "registration closed — ask an administrator to create your account".to_string(),
+            ));
+        };
+        if existing.claimed() {
+            return Err(ApiError::Conflict(
+                "account already registered — sign in instead".to_string(),
+            ));
+        }
+        set_password(&client, &existing.id, password_hash).await?;
+        // Stamp the Telegram identity the bot actually saw, so the invite's
+        // pre-resolved binding (if any) is replaced by the verified one.
+        let mut fields = bson::Document::new();
+        if let Some(verified_by) = claim.verified_by {
+            fields.insert("telegram_user_id", bson::Bson::from(verified_by));
+        }
+        if let Some(name) = &claim.verified_username {
+            fields.insert("telegram_username", bson::Bson::from(name.clone()));
+        }
+        if !fields.is_empty() {
+            update_user_fields(&client, &existing.id, fields).await?;
+        }
+        existing.username
+    };
+
+    let token = create_session(&state.sessions, username.clone());
+    tracing::info!(username = %username, "account claim completed — signed in");
+    Ok(Json(ClaimConfirmResponse { token, username }))
+}
+
+/// GET /api/auth/claim/available?username=… — pre-flight check for the
+/// username-only create screen (no session, no Telegram).
+async fn claim_available(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ClaimAvailableQuery>,
+) -> ApiResult<Json<ClaimAvailableResponse>> {
+    // Syntax first: never touch Mongo for a malformed name.
+    if let Err(reason) = validate_username(&query.username) {
+        return Ok(Json(ClaimAvailableResponse {
+            username: query.username,
+            available: false,
+            reason: Some(reason.to_string()),
+        }));
+    }
+
+    let client = state.mongo_client().await?;
+    let response = if count_role(&client, "admin").await? == 0 {
+        // ===== Owner bootstrap: the name is free to claim =====
+        if find_user(&client, &query.username)
+            .await?
+            .is_some_and(|u| u.claimed())
+        {
+            ClaimAvailableResponse {
+                username: query.username,
+                available: false,
+                reason: Some("username already registered — sign in instead".to_string()),
+            }
+        } else {
+            ClaimAvailableResponse {
+                username: query.username,
+                available: true,
+                reason: None,
+            }
+        }
+    } else {
+        // ===== Invited users: only an existing, unclaimed invite qualifies =====
+        match find_user(&client, &query.username).await? {
+            Some(existing) if !existing.claimed() => ClaimAvailableResponse {
+                username: query.username,
+                available: true,
+                reason: None,
+            },
+            Some(_) => ClaimAvailableResponse {
+                username: query.username,
+                available: false,
+                reason: Some("username already registered — sign in instead".to_string()),
+            },
+            None => ClaimAvailableResponse {
+                username: query.username,
+                available: false,
+                reason: Some(
+                    "registration closed — ask an administrator to create your account".to_string(),
+                ),
+            },
+        }
+    };
+    Ok(Json(response))
 }
 
 // ===== Self-service account management =====
@@ -1210,6 +1573,11 @@ impl IntoResponse for ApiError {
                 "Configuration not found".to_string(),
                 None,
             ),
+            ApiError::Database(DbError::NotConfigured) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                DbError::NotConfigured.to_string(),
+                None,
+            ),
             ApiError::Config(ConfigError::InvalidPassword(msg)) => {
                 (StatusCode::UNAUTHORIZED, msg.clone(), None)
             }
@@ -1275,6 +1643,10 @@ pub struct AppState {
     /// Lazily-built bot pool for uploads and streams. Nothing connects to
     /// Telegram until the first transfer: the setup wizard may not have run.
     transfer: Arc<tokio::sync::OnceCell<Arc<BotPool>>>,
+    /// Pending owner claims: secret -> entry (see the claim flow above).
+    claims: ClaimStore,
+    /// Lazily-started claim bot (its @username builds t.me deep links).
+    claim_bot: Arc<tokio::sync::OnceCell<Arc<ClaimBotHandle>>>,
 }
 
 impl AppState {
@@ -1286,6 +1658,8 @@ impl AppState {
             tg: Arc::new(tokio::sync::Mutex::new(None)),
             mongo: Arc::new(tokio::sync::OnceCell::new()),
             transfer: Arc::new(tokio::sync::OnceCell::new()),
+            claims: Arc::new(Mutex::new(HashMap::new())),
+            claim_bot: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -1295,11 +1669,27 @@ impl AppState {
     /// A failed attempt is not cached, so a transient outage still recovers on
     /// the next request instead of latching an unusable client.
     pub async fn mongo_client(&self) -> Result<Client, DbError> {
-        let client = self
-            .mongo
-            .get_or_try_init(|| connect(&self.mongo_uri))
-            .await?;
+        let uri = self.resolve_mongo_uri()?;
+        let client = self.mongo.get_or_try_init(|| connect(&uri)).await?;
         Ok(client.clone())
+    }
+
+    /// The MongoDB URI this process should talk to: whatever the setup
+    /// wizard stored in config.tfs. No environment variable and no
+    /// localhost default — the operator supplies a URI (a cloud cluster
+    /// in practice) and the wizard persists it.
+    ///
+    /// Resolved per call rather than captured at boot, so a wizard run
+    /// against an already-serving process takes effect immediately.
+    fn resolve_mongo_uri(&self) -> Result<String, DbError> {
+        if !self.mongo_uri.is_empty() {
+            // Tests and CI build state with an explicit URI.
+            return Ok(self.mongo_uri.clone());
+        }
+        match load_connection() {
+            Ok(Some(store)) => Ok(store.mongo_uri),
+            Ok(None) | Err(_) => Err(DbError::NotConfigured),
+        }
     }
 
     /// The bot pool backing uploads and streams, built on first use from the
@@ -1327,6 +1717,101 @@ impl AppState {
         Ok(Arc::clone(pool))
     }
 
+    /// Start (once per process) the claim bot listener and return its handle.
+    ///
+    /// The first connection runs inline so its @username is available for the
+    /// deep link; afterwards a background task keeps the listener alive with
+    /// reconnect/backoff. A failed first connect is not cached, so a transient
+    /// Telegram outage does not permanently disable claiming.
+    pub(crate) async fn ensure_claim_bot(&self) -> Result<Arc<ClaimBotHandle>, ApiError> {
+        let handle = self
+            .claim_bot
+            .get_or_try_init(|| async {
+                let creds = load_telegram_creds()?;
+                let token = creds
+                    .bot_tokens
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| ApiError::Telegram("no bot token configured".to_string()))?;
+                let session_path = get_bin_dir().join("claim-bot.session");
+                let bot = ClaimBot::connect(
+                    creds.api_id,
+                    creds.api_hash.clone(),
+                    token.clone(),
+                    session_path.clone(),
+                )
+                .await
+                .map_err(|e| ApiError::Telegram(format!("claim bot failed to connect: {e}")))?;
+                let bot_username = bot.bot_username().to_string();
+                tracing::info!(bot_username = %bot_username, "claim bot ready");
+
+                let claims = Arc::clone(&self.claims);
+                let api_id = creds.api_id;
+                let api_hash = creds.api_hash.clone();
+                tokio::spawn(async move {
+                    let mut bot = Some(bot);
+                    let mut attempt = 0u32;
+                    loop {
+                        let current = match bot.take() {
+                            Some(b) => b,
+                            None => {
+                                match ClaimBot::connect(
+                                    api_id,
+                                    api_hash.clone(),
+                                    token.clone(),
+                                    session_path.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        tracing::error!(error = %e, attempt, "claim bot reconnect failed");
+                                        attempt += 1;
+                                        let delay =
+                                            std::cmp::min(30, 1u64 << attempt.min(5));
+                                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        attempt = 0;
+                        let store = Arc::clone(&claims);
+                        let result = current
+                            .run(move |ev| {
+                                let mut map = store.lock().unwrap();
+                                match map.get_mut(&ev.secret) {
+                                    Some(entry) if entry.verified => {
+                                        "This link was already used. Start again from TelegramFileServer.".to_string()
+                                    }
+                                    Some(entry) => {
+                                        match entry.expected_sender {
+                                            Some(expected) if expected != ev.sender_id => {
+                                                "This link is not valid for your Telegram account.".to_string()
+                                            }
+                                            _ => {
+                                                entry.verified = true;
+                                                entry.verified_by = Some(ev.sender_id);
+                                                entry.verified_username = ev.sender_username;
+                                                "Verified. Return to TelegramFileServer to finish creating your account.".to_string()
+                                            }
+                                        }
+                                    }
+                                    None => "Unknown or expired link. Start again from TelegramFileServer.".to_string(),
+                                }
+                            })
+                            .await;
+                        tracing::warn!(?result, "claim bot listener stopped");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                });
+
+                Ok::<Arc<ClaimBotHandle>, ApiError>(Arc::new(ClaimBotHandle { bot_username }))
+            })
+            .await?;
+        Ok(Arc::clone(handle))
+    }
+
     /// Tests/dev: fixed owner identity, no Telegram involved.
     #[cfg(test)]
     fn with_owner_resolver(mut self, resolver: OwnerResolver) -> Self {
@@ -1342,8 +1827,9 @@ async fn check_setup(
 ) -> ApiResult<Json<CheckResponse>> {
     validate_step1(&input).map_err(ApiError::Validation)?;
 
-    // The URI typed in the wizard is authoritative — do NOT use the server's
-    // configured MONGO_URI here (that is only a launch default).
+    // The URI typed in the wizard is authoritative — do NOT read the saved
+    // config.tfs here: this request is what decides which database the rest
+    // of the setup will live in.
     let client = connect(&input.mongo_uri).await?;
     tracing::info!("Setup check: MongoDB reachable");
 
@@ -2266,6 +2752,10 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/register", post(auth_register))
         .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/claim/start", post(claim_start))
+        .route("/api/auth/claim/status/:secret", get(claim_status))
+        .route("/api/auth/claim/confirm", post(claim_confirm))
+        .route("/api/auth/claim/available", get(claim_available))
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/username-available", get(auth_username_available))
@@ -2764,6 +3254,197 @@ mod tests {
         assert_eq!(set.storage_chat_id, Some(Some(-100500)));
     }
 
+    /// The URI the wizard stored in config.tfs — encrypted under the password
+    /// that appdata data.tfs holds — is what a running server connects with.
+    /// No environment variable, no localhost fallback.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn saved_config_tfs_supplies_the_mongo_uri() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempdir().unwrap();
+        unsafe {
+            env::set_var("TFS_DATA_DIR", temp_dir.path());
+            env::set_var("TFS_BIN_DIR", temp_dir.path().join("bin"));
+        };
+
+        save_connection(&ConnectionStore {
+            mongo_uri: "mongodb+srv://cluster.example.net/tfs".to_string(),
+            password: "password123".to_string(),
+        })
+        .unwrap();
+
+        // Empty state URI is exactly what the server boots with now.
+        let state = AppState::new(String::new());
+        assert_eq!(
+            state.resolve_mongo_uri().unwrap(),
+            "mongodb+srv://cluster.example.net/tfs"
+        );
+
+        unsafe {
+            env::remove_var("TFS_DATA_DIR");
+            env::remove_var("TFS_BIN_DIR");
+        };
+    }
+
+    /// With no saved config there is nothing to dial, and saying so beats
+    /// guessing localhost. (A non-empty state URI still wins — that path
+    /// exists only for tests and CI.)
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn no_saved_config_is_not_configured() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempdir().unwrap();
+        unsafe {
+            env::set_var("TFS_DATA_DIR", temp_dir.path());
+            env::set_var("TFS_BIN_DIR", temp_dir.path().join("bin"));
+        };
+
+        let state = AppState::new(String::new());
+        assert!(matches!(
+            state.resolve_mongo_uri(),
+            Err(DbError::NotConfigured)
+        ));
+
+        let explicit = AppState::new("mongodb://example.invalid:27017".to_string());
+        assert_eq!(
+            explicit.resolve_mongo_uri().unwrap(),
+            "mongodb://example.invalid:27017"
+        );
+
+        unsafe {
+            env::remove_var("TFS_DATA_DIR");
+            env::remove_var("TFS_BIN_DIR");
+        };
+    }
+
+    /// Claim status reads only the in-memory store: pending → verified, and
+    /// a secret that was never issued (or has expired) reads as unknown.
+    #[tokio::test]
+    async fn claim_status_reflects_pending_verified_and_unknown() {
+        let state = test_state("mongodb://127.0.0.1:1");
+        state.claims.lock().unwrap().insert(
+            "secret123".to_string(),
+            ClaimEntry::new("admin".to_string(), None),
+        );
+
+        let resp = claim_status(State(Arc::clone(&state)), Path("secret123".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resp.0.status, "pending");
+        assert_eq!(resp.0.username.as_deref(), Some("admin"));
+
+        state
+            .claims
+            .lock()
+            .unwrap()
+            .get_mut("secret123")
+            .unwrap()
+            .verified = true;
+        let resp = claim_status(State(Arc::clone(&state)), Path("secret123".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resp.0.status, "verified");
+
+        let resp = claim_status(State(state), Path("never-issued".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resp.0.status, "unknown");
+        assert!(resp.0.username.is_none());
+    }
+
+    /// Expired secrets are purged on read and report as unknown.
+    #[tokio::test]
+    async fn claim_status_expires_old_secrets() {
+        let state = test_state("mongodb://127.0.0.1:1");
+        let created = Instant::now()
+            .checked_sub(CLAIM_TTL + Duration::from_secs(1))
+            .expect("machine uptime exceeds the claim TTL");
+        let mut stale = ClaimEntry::new("admin".to_string(), None);
+        stale.created = created;
+        stale.verified = true;
+        state
+            .claims
+            .lock()
+            .unwrap()
+            .insert("stale".to_string(), stale);
+
+        let resp = claim_status(State(Arc::clone(&state)), Path("stale".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resp.0.status, "unknown");
+        assert!(!state.claims.lock().unwrap().contains_key("stale"));
+    }
+
+    /// Only the owner's username (or `admin`) may start a claim in the
+    /// bootstrap phase; anything else is rejected once Mongo confirms no
+    /// admin exists yet.
+    ///
+    /// Run with: cargo test -p tfs-api -- --ignored --test-threads=1
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn claim_start_rejects_non_owner_usernames() {
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+        get_users_collection(&client)
+            .delete_many(doc! {})
+            .await
+            .unwrap();
+
+        let state = test_state(&uri);
+        let err = claim_start(
+            State(state),
+            Json(ClaimStartRequest {
+                username: "mallory".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden(_)));
+    }
+
+    #[tokio::test]
+    async fn claim_start_rejects_invalid_usernames() {
+        let state = test_state("mongodb://127.0.0.1:1");
+        let err = claim_start(
+            State(state),
+            Json(ClaimStartRequest {
+                username: "no".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::Validation(_)));
+    }
+
+    /// The availability gate answers malformed names without touching Mongo,
+    /// so the create screen can grey out the button instantly.
+    #[tokio::test]
+    async fn claim_available_rejects_invalid_usernames_without_mongo() {
+        let state = test_state("mongodb://127.0.0.1:1");
+        let resp = claim_available(
+            State(state),
+            Query(ClaimAvailableQuery {
+                username: "no".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(!resp.0.available);
+        assert!(resp.0.reason.is_some());
+    }
+
+    /// Claim secrets are 32 hex chars — inside the `/start` payload limit.
+    #[test]
+    fn claim_secrets_fit_the_deep_link_payload_limit() {
+        for _ in 0..16 {
+            let secret = generate_claim_secret();
+            assert_eq!(secret.len(), 32);
+            assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
+            // https://t.me/<bot>?start=<secret> — payload must stay <= 64.
+            assert!(secret.len() <= 64);
+        }
+    }
+
     /// The catch-all routes answer an unauthenticated caller with 401 +
     /// `WWW-Authenticate` before a single Mongo or Telegram call happens.
     #[tokio::test]
@@ -3129,6 +3810,96 @@ mod tests {
             .unwrap();
         assert_eq!(logout2.into_response().status(), StatusCode::NO_CONTENT);
         assert!(auth_me(State(state.clone()), bearer(&token)).await.is_err());
+    }
+
+    /// The confirm half of the claim flow: once the claim store says a secret
+    /// is verified (the bot does that in production; here the test seeds it),
+    /// confirm creates the owner account and hands back a working session.
+    /// Unverified secrets are refused, and secrets are single-use.
+    ///
+    /// Run with: cargo test -p tfs-api -- --ignored --test-threads=1
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn claim_confirm_creates_the_owner_account_after_verification() {
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+
+        let collection = get_users_collection(&client);
+        collection.delete_many(doc! {}).await.unwrap();
+
+        let state = test_state(&uri);
+        // Simulate the claim bot: a verified secret for the owner username,
+        // plus an unverified one that must be refused.
+        {
+            let mut claims = state.claims.lock().unwrap();
+            let mut verified = ClaimEntry::new("testuser".to_string(), None);
+            verified.verified = true;
+            claims.insert("verifiedsecret".to_string(), verified);
+            claims.insert(
+                "unverifiedsecret".to_string(),
+                ClaimEntry::new("testuser".to_string(), None),
+            );
+        }
+
+        // Unverified → refused, secret kept for the poller.
+        let err = claim_confirm(
+            State(state.clone()),
+            Json(ClaimConfirmRequest {
+                secret: "unverifiedsecret".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            ApiError::Forbidden(msg) => assert!(msg.contains("not verified")),
+            e => panic!("expected Forbidden unverified, got {e:?}"),
+        }
+        assert!(
+            state
+                .claims
+                .lock()
+                .unwrap()
+                .contains_key("unverifiedsecret")
+        );
+
+        // Verified → owner account created; token works without a login call.
+        let resp = claim_confirm(
+            State(state.clone()),
+            Json(ClaimConfirmRequest {
+                secret: "verifiedsecret".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.0.username, "testuser");
+        assert!(!resp.0.token.is_empty());
+        assert!(validate_session(&state.sessions, &resp.0.token).is_some());
+
+        // Secret is single-use.
+        assert!(!state.claims.lock().unwrap().contains_key("verifiedsecret"));
+
+        // Account exists: admin role, password set, linked to the owner id.
+        let owner = find_user(&client, "testuser").await.unwrap().unwrap();
+        assert_eq!(owner.role, "admin");
+        assert!(owner.is_owner());
+        assert!(owner.claimed());
+        assert_eq!(owner.telegram_user_id, Some(999999));
+
+        // Signing in with the password the claim set also works.
+        let login = auth_login(
+            State(state.clone()),
+            Json(LoginRequest {
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(login.0.username, "testuser");
+
+        collection.delete_many(doc! {}).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
