@@ -32,13 +32,15 @@ export default function LoadingPage() {
     const checkLoginStatus = async () => {
       if (cancelled) return;
 
-      // TFS: not configured → setup wizard
+      // TFS: not configured → setup wizard (in-UI at /setup)
       try {
         const r = await fetch("/api/setup/resume");
         if (r.ok) {
           const d = await r.json();
           if (d.saved === false || d.configured === false) {
-            window.location.href = "/";
+            if (!cancelled) {
+              navigate("/setup", { replace: true });
+            }
             return;
           }
         }

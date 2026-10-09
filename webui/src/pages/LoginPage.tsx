@@ -1,17 +1,20 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
 import { TelegramButton } from "@/components/skybox/TelegramButton";
 import { TelegramInput } from "@/components/skybox/TelegramInput";
-import { toast } from "@/hooks/use-toast";
 import { getVersion } from "@tauri-apps/api/app";
 import { logger } from "@/lib/logger";
 import {
   ApiHttpError,
   apiJson,
+  claimAvailable,
+  claimConfirm,
+  claimStart,
+  claimStatus,
   fetchAuthStatus,
   setAuthToken,
+  type ClaimStartResponse,
 } from "@/lib/auth";
 import appStartIcon from "@/assets/images/icon.png";
 
@@ -20,35 +23,42 @@ interface LoginResponse {
   username: string;
 }
 
-interface RegisterResponse {
-  ok: boolean;
-  username: string;
-}
-
 type LoginMode = "signin" | "register";
 type RegistrationMode = "owner" | "invite";
+/** Every new account follows the same path: username → Telegram → password. */
+type CreateStep = "username" | "verify" | "password";
+/** Availability of the typed username; idle until a valid name is typed. */
+type Availability = "idle" | "checking" | "available" | "unavailable";
 
 const USERNAME_REGEX = /^[A-Za-z0-9_.-]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 8;
+const CLAIM_POLL_MS = 2000;
+const AVAILABILITY_DEBOUNCE_MS = 400;
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<LoginMode>("signin");
-  // Registration flow reported by /api/auth/status: "owner" = first-account
-  // bootstrap (the Telegram owner's username, or the reserved `admin` name),
-  // "invite" = claim a username an administrator created.
+  // Registration flavour from /api/auth/status: "owner" = first-account
+  // bootstrap, "invite" = an administrator created the username. The create
+  // flow itself is identical for both — only the copy differs.
   const [registration, setRegistration] =
     useState<RegistrationMode>("invite");
+  const [step, setStep] = useState<CreateStep>("username");
+  const [claim, setClaim] = useState<ClaimStartResponse | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [availability, setAvailability] = useState<Availability>("idle");
+  const [availabilityReason, setAvailabilityReason] = useState("");
   const [appVersion, setAppVersion] = useState<string>("...");
   const [usernameError, setUsernameError] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [confirmPasswordError, setConfirmPasswordError] = useState("");
   const [serverError, setServerError] = useState("");
+
+  const registerFlow = mode === "register";
 
   useEffect(() => {
     let cancelled = false;
@@ -76,9 +86,13 @@ export default function LoginPage() {
         }
       } catch (error) {
         logger.warn("LoginPage: Failed to check auth status", error);
-        if (!cancelled) {
-          setMode("signin");
+        if (cancelled) return;
+        if (error instanceof ApiHttpError && error.status === 503) {
+          // No saved connection — the setup wizard owns this state.
+          navigate("/setup", { replace: true });
+          return;
         }
+        setMode("signin");
       }
     };
 
@@ -88,7 +102,94 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [navigate]);
+
+  // Debounced availability check on the create screen: the Create Account
+  // button stays disabled until the server says the name is claimable, so
+  // users learn the problem before Telegram ever opens.
+  useEffect(() => {
+    if (!registerFlow || step !== "username") {
+      return;
+    }
+    if (!USERNAME_REGEX.test(username)) {
+      setAvailability("idle");
+      setAvailabilityReason("");
+      return;
+    }
+
+    let cancelled = false;
+    setAvailability("checking");
+    setAvailabilityReason("");
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await claimAvailable(username);
+          if (cancelled) return;
+          if (result.available) {
+            setAvailability("available");
+            setAvailabilityReason("");
+          } else {
+            setAvailability("unavailable");
+            setAvailabilityReason(
+              result.reason ?? "This username cannot be claimed.",
+            );
+          }
+        } catch (error) {
+          if (cancelled) return;
+          logger.warn("LoginPage: availability check failed", error);
+          setAvailability("unavailable");
+          setAvailabilityReason(
+            "Could not reach the server — check your connection and try again.",
+          );
+        }
+      })();
+    }, AVAILABILITY_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [registerFlow, step, username]);
+
+  // Poll the claim while waiting for the deep link to be tapped in
+  // Telegram. On "verified" the flow advances to the password step by
+  // itself — no page refresh, no extra click.
+  useEffect(() => {
+    if (!registerFlow || step !== "verify" || !claim) {
+      return;
+    }
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const status = await claimStatus(claim.secret);
+        if (cancelled) return;
+        if (status.status === "verified") {
+          setServerError("");
+          setStep("password");
+        } else if (status.status === "unknown") {
+          // Purged or never issued — from here that means it expired.
+          setClaim(null);
+          setStep("username");
+          setServerError(
+            "The claim link expired — enter your username to start again.",
+          );
+        }
+        // "pending" — keep polling.
+      } catch (error) {
+        if (!cancelled) {
+          logger.warn("LoginPage: claim status poll failed", error);
+        }
+      }
+    };
+
+    void poll();
+    const interval = setInterval(() => void poll(), CLAIM_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [registerFlow, step, claim]);
 
   const validateUsername = (value: string): string => {
     if (!value) return "Username is required";
@@ -120,6 +221,21 @@ export default function LoginPage() {
     setServerError("");
   };
 
+  const resetCreateFlow = () => {
+    setStep("username");
+    setClaim(null);
+    setPassword("");
+    setConfirmPassword("");
+    setPasswordError("");
+    setConfirmPasswordError("");
+  };
+
+  const finishSession = (token: string) => {
+    setAuthToken(token);
+    void queryClient.invalidateQueries({ queryKey: ["me"] });
+    navigate("/explorer", { replace: true });
+  };
+
   const handleUsernameChange = (value: string) => {
     setUsername(value);
     setUsernameError(validateUsername(value));
@@ -141,55 +257,138 @@ export default function LoginPage() {
     if (serverError) setServerError("");
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // ===== Create flow: username → verify → password =====
+
+  const handleUsernameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     clearErrors();
 
     const usernameErr = validateUsername(username);
-    const passwordErr = validatePassword(password);
-    const confirmPasswordErr = validateConfirmPassword(confirmPassword);
-
-    if (usernameErr || passwordErr || confirmPasswordErr) {
-      if (usernameErr) setUsernameError(usernameErr);
-      if (passwordErr) setPasswordError(passwordErr);
-      if (confirmPasswordErr) setConfirmPasswordError(confirmPasswordErr);
+    if (usernameErr) {
+      setUsernameError(usernameErr);
+      return;
+    }
+    // Enter submits even when the button is disabled — gate here too.
+    if (availability !== "available") {
+      setUsernameError(availabilityReason || "Checking availability…");
       return;
     }
 
     setIsLoading(true);
-
     try {
-      const body = JSON.stringify({ username, password });
-      const request = (path: string) =>
-        apiJson<LoginResponse | RegisterResponse>(path, {
-          method: "POST",
-          body,
-        });
-
-      if (mode === "register") {
-        // Register claims the account (owner bootstrap or invite) but issues
-        // no session — sign in with the same credentials so the user lands in
-        // the app directly.
-        await request("/api/auth/register");
-      }
-
-      const login = (await request("/api/auth/login")) as LoginResponse;
-      setAuthToken(login.token);
-      void queryClient.invalidateQueries({ queryKey: ["me"] });
-      navigate("/explorer", { replace: true });
+      const started = await claimStart(username);
+      setClaim(started);
+      setStep("verify");
+      // Open Telegram right away: the whole point of the button.
+      window.open(started.deep_link, "_blank", "noopener,noreferrer");
     } catch (error) {
       if (error instanceof ApiHttpError) {
-        if (mode === "register" && error.status === 409) {
-          // Already claimed — show the reason and move to sign-in.
+        if (error.status === 409) {
           setServerError(error.message);
           setMode("signin");
-          setConfirmPassword("");
           return;
         }
         setServerError(error.message);
         return;
       }
-      logger.error("LoginPage: Submit failed", error);
+      logger.error("LoginPage: claim start failed", error);
+      setServerError(
+        "Network error. Please check your connection and try again.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearErrors();
+
+    const passwordErr = validatePassword(password);
+    const confirmPasswordErr = validateConfirmPassword(confirmPassword);
+    if (passwordErr || confirmPasswordErr) {
+      if (passwordErr) setPasswordError(passwordErr);
+      if (confirmPasswordErr) setConfirmPasswordError(confirmPasswordErr);
+      return;
+    }
+    if (!claim) {
+      setServerError("The claim expired — start again from the beginning.");
+      setStep("username");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const confirmed = await claimConfirm(claim.secret, password);
+      finishSession(confirmed.token);
+    } catch (error) {
+      if (error instanceof ApiHttpError) {
+        if (error.status === 409) {
+          setServerError(error.message);
+          setMode("signin");
+          return;
+        }
+        if (error.status === 403 && error.message.includes("not verified")) {
+          setServerError(error.message);
+          setStep("verify");
+          return;
+        }
+        if (error.status === 403) {
+          // Expired/unknown secret — begin again with the username.
+          setServerError(error.message);
+          resetCreateFlow();
+          return;
+        }
+        setServerError(error.message);
+        return;
+      }
+      logger.error("LoginPage: claim confirm failed", error);
+      setServerError(
+        "Network error. Please check your connection and try again.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOpenTelegram = () => {
+    if (claim) {
+      window.open(claim.deep_link, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handleClaimReset = () => {
+    clearErrors();
+    resetCreateFlow();
+  };
+
+  // ===== Sign in =====
+
+  const handleSignInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearErrors();
+
+    const usernameErr = validateUsername(username);
+    const passwordErr = validatePassword(password);
+    if (usernameErr || passwordErr) {
+      if (usernameErr) setUsernameError(usernameErr);
+      if (passwordErr) setPasswordError(passwordErr);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const login = await apiJson<LoginResponse>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      finishSession(login.token);
+    } catch (error) {
+      if (error instanceof ApiHttpError) {
+        setServerError(error.message);
+        return;
+      }
+      logger.error("LoginPage: Sign in failed", error);
       setServerError("Network error. Please check your connection and try again.");
     } finally {
       setIsLoading(false);
@@ -202,6 +401,58 @@ export default function LoginPage() {
     setUsername("");
     setPassword("");
     setConfirmPassword("");
+    setAvailability("idle");
+    setAvailabilityReason("");
+    resetCreateFlow();
+  };
+
+  const createSubtitle = () => {
+    switch (step) {
+      case "username":
+        return registration === "owner"
+          ? "Set up the owner account — your Telegram username, or admin"
+          : "An administrator created your username — enter it to claim it";
+      case "verify":
+        return "Verify in Telegram to prove you own this account";
+      case "password":
+        return "Choose a password to finish setting up";
+    }
+  };
+
+  const createUsernameInput = () => (
+    <TelegramInput
+      label="Username"
+      type="text"
+      value={username}
+      onChange={(e) => handleUsernameChange(e.target.value)}
+      error={
+        usernameError ||
+        (availability === "unavailable" ? availabilityReason : "")
+      }
+      placeholder={
+        registration === "owner" ? "Telegram username or admin" : "Your username"
+      }
+      autoComplete="username"
+      disabled={isLoading}
+    />
+  );
+
+  const availabilityHint = () => {
+    if (availability === "checking") {
+      return (
+        <p className="text-xs text-muted-foreground" role="status">
+          Checking availability…
+        </p>
+      );
+    }
+    if (availability === "available") {
+      return (
+        <p className="text-xs text-accent" role="status">
+          Available — continue to Telegram verification
+        </p>
+      );
+    }
+    return null;
   };
 
   return (
@@ -219,11 +470,7 @@ export default function LoginPage() {
                 TelegramFileServer
               </h1>
               <p className="text-muted-foreground">
-                {mode === "register"
-                  ? registration === "owner"
-                    ? "Set up the owner account — your Telegram username, or admin"
-                    : "An administrator created your username — set a password to claim it"
-                  : "Sign in to your file server"}
+                {registerFlow ? createSubtitle() : "Sign in to your file server"}
               </p>
             </div>
 
@@ -236,34 +483,81 @@ export default function LoginPage() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <TelegramInput
-                label="Username"
-                type="text"
-                value={username}
-                onChange={(e) => handleUsernameChange(e.target.value)}
-                error={usernameError}
-                placeholder={
-                  mode === "register" && registration === "owner"
-                    ? "Telegram username or admin"
-                    : "Enter your username"
-                }
-                autoComplete="username"
-                disabled={isLoading}
-              />
+            {registerFlow && step === "username" && (
+              <form onSubmit={handleUsernameSubmit} className="space-y-4">
+                {createUsernameInput()}
+                {availabilityHint()}
+                <TelegramButton
+                  type="submit"
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  loading={isLoading}
+                  disabled={isLoading || availability !== "available"}
+                >
+                  Create Account
+                </TelegramButton>
+              </form>
+            )}
 
-              <TelegramInput
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => handlePasswordChange(e.target.value)}
-                error={passwordError}
-                placeholder="Enter your password"
-                autoComplete={mode === "signin" ? "current-password" : "new-password"}
-                disabled={isLoading}
-              />
+            {registerFlow && step === "verify" && claim && (
+              <div className="space-y-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Telegram opened (or open it below). Send{" "}
+                  <code className="px-1.5 py-0.5 rounded bg-muted text-foreground">
+                    /start
+                  </code>{" "}
+                  to the bot to verify{" "}
+                  <span className="font-medium text-foreground">
+                    {claim.username}
+                  </span>
+                  .
+                </p>
+                <TelegramButton
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  onClick={handleOpenTelegram}
+                >
+                  Open Telegram
+                </TelegramButton>
+                <div
+                  className="flex items-center justify-center gap-2 text-sm text-muted-foreground"
+                  role="status"
+                >
+                  <span className="inline-block h-2 w-2 rounded-full bg-accent animate-pulse" />
+                  Waiting for verification…
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClaimReset}
+                  className="text-sm text-muted-foreground hover:text-foreground underline"
+                  disabled={isLoading}
+                >
+                  Start over
+                </button>
+              </div>
+            )}
 
-              {mode === "register" && (
+            {registerFlow && step === "password" && (
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div
+                  className="p-3 rounded-lg bg-accent/10 border border-accent/30 text-accent text-sm"
+                  role="status"
+                >
+                  Verified in Telegram — choose a password to finish.
+                </div>
+                <TelegramInput
+                  label="Password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => handlePasswordChange(e.target.value)}
+                  error={passwordError}
+                  placeholder="Choose a password"
+                  autoComplete="new-password"
+                  disabled={isLoading}
+                />
                 <TelegramInput
                   label="Confirm Password"
                   type="password"
@@ -274,26 +568,58 @@ export default function LoginPage() {
                   autoComplete="new-password"
                   disabled={isLoading}
                 />
-              )}
+                <TelegramButton
+                  type="submit"
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  loading={isLoading}
+                  disabled={isLoading}
+                >
+                  Finish setup
+                </TelegramButton>
+              </form>
+            )}
 
-              <TelegramButton
-                type="submit"
-                variant="primary"
-                size="lg"
-                fullWidth
-                loading={isLoading}
-                disabled={isLoading}
-              >
-                {mode === "register"
-                  ? registration === "invite"
-                    ? "Claim Account"
-                    : "Create Owner Account"
-                  : "Sign In"}
-              </TelegramButton>
-            </form>
+            {!registerFlow && (
+              <form onSubmit={handleSignInSubmit} className="space-y-4">
+                <TelegramInput
+                  label="Username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => handleUsernameChange(e.target.value)}
+                  error={usernameError}
+                  placeholder="Enter your username"
+                  autoComplete="username"
+                  disabled={isLoading}
+                />
+
+                <TelegramInput
+                  label="Password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => handlePasswordChange(e.target.value)}
+                  error={passwordError}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  disabled={isLoading}
+                />
+
+                <TelegramButton
+                  type="submit"
+                  variant="primary"
+                  size="lg"
+                  fullWidth
+                  loading={isLoading}
+                  disabled={isLoading}
+                >
+                  Sign In
+                </TelegramButton>
+              </form>
+            )}
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
-              {mode === "register"
+              {registerFlow
                 ? "Already have an account? "
                 : registration === "invite"
                   ? "Invited to join? "
@@ -304,11 +630,7 @@ export default function LoginPage() {
                 className="text-primary hover:text-accent underline font-medium"
                 disabled={isLoading}
               >
-                {mode === "register"
-                  ? "Sign in"
-                  : registration === "invite"
-                    ? "Claim account"
-                    : "Create account"}
+                {registerFlow ? "Sign in" : "Create account"}
               </button>
             </p>
           </div>

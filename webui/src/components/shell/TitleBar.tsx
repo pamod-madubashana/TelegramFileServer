@@ -22,7 +22,6 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { useRequiredChannelNotifications } from "@/lib/required-channel-notifications";
 import {
-  loadRequiredChannelConfig,
   REQUIRED_CHANNEL_FALLBACK,
   type RequiredChannelConfig,
 } from "@/lib/required-channel";
@@ -105,9 +104,7 @@ export function TitleBar() {
   const isOnline = useNetworkStatus();
   const navigate = useNavigate();
   const location = useLocation();
-  const [channelConfig, setChannelConfig] = useState<RequiredChannelConfig>(
-    REQUIRED_CHANNEL_FALLBACK,
-  );
+  const channelConfig: RequiredChannelConfig = REQUIRED_CHANNEL_FALLBACK;
   const [isMaximized, setIsMaximized] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const notificationsButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -145,21 +142,6 @@ export function TitleBar() {
       channelConfig.chatId,
       channelConfig.chatTitle,
     );
-
-  useEffect(() => {
-    let cancelled = false;
-    loadRequiredChannelConfig()
-      .then((config) => {
-        if (cancelled) return;
-        setChannelConfig(config);
-      })
-      .catch(() => {
-        // ignore
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     const appWindow = currentWindow();

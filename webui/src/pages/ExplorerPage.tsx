@@ -212,9 +212,6 @@ export default function ExplorerPage() {
     setPendingChatDriveCandidate,
     setIsChatDrivePickerOpen,
     handleConfirmChatDriveCandidate,
-    mustJoinRequiredChannel,
-    requiredChannel,
-    handleRequiredChannelConfirmed,
   } = useExplorerPageController();
 
   useReactPageLogger(
@@ -533,9 +530,6 @@ export default function ExplorerPage() {
         setPendingChatDriveCandidate={setPendingChatDriveCandidate}
         onCloseChatDrivePicker={() => setIsChatDrivePickerOpen(false)}
         onConfirmChatDriveCandidate={handleConfirmChatDriveCandidate}
-        mustJoinRequiredChannel={mustJoinRequiredChannel}
-        requiredChannel={requiredChannel}
-        onRequiredChannelConfirmed={handleRequiredChannelConfirmed}
       />
     </div>
   );

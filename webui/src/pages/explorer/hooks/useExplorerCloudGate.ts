@@ -6,11 +6,6 @@ import {
   type MutableRefObject,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import {
-  loadRequiredChannelConfig,
-  type RequiredChannelConfig,
-} from "@/lib/required-channel";
 import { getBlockingRuntimeError } from "@/lib/telegramRuntime";
 
 type Args = {
@@ -27,15 +22,11 @@ export function useExplorerCloudGate({
   sessionDataRef,
 }: Args) {
   const [isOffline, setIsOffline] = useState(initialIsOffline);
-  const [requiredChannel, setRequiredChannel] =
-    useState<RequiredChannelConfig | null>(null);
-  const [mustJoinRequiredChannel, setMustJoinRequiredChannel] = useState(false);
   const cloudSyncTimerRef = useRef<number | null>(null);
   const cloudSyncQueuedTimerRef = useRef<number | null>(null);
   const cloudSyncInFlightRef = useRef(false);
   const cloudSyncEnabledRef = useRef(true);
   const cloudSyncDirtyRef = useRef(false);
-  const lastMembershipCheckAtRef = useRef<number>(0);
 
   useEffect(() => {
     isOfflineRef.current = isOffline;
@@ -173,110 +164,14 @@ export function useExplorerCloudGate({
     });
   }, [hasAttemptedSessionRestoreRef, isOffline, sessionDataRef]);
 
-  const runRequiredChannelMembershipCheck = useCallback(
-    async (cfg: RequiredChannelConfig, mode: "bootstrap" | "revalidate") => {
-      const now = Date.now();
-      if (now - lastMembershipCheckAtRef.current < 1200) {
-        return;
-      }
-      lastMembershipCheckAtRef.current = now;
-
-      try {
-        const result: {
-          status?: string;
-          is_member?: boolean;
-          isMember?: boolean;
-        } = await invoke(
-          mode === "bootstrap"
-            ? "tg_required_channel_bootstrap"
-            : "tg_required_channel_revalidate",
-          { chatId: cfg.chatId },
-        );
-        const status =
-          typeof result?.status === "string"
-            ? result.status
-            : result?.is_member === true || result?.isMember === true
-              ? "member"
-              : "not_member";
-        setMustJoinRequiredChannel(status !== "member");
-      } catch (error) {
-        if (getBlockingRuntimeError(error)) {
-          setMustJoinRequiredChannel(false);
-          return;
-        }
-
-        setMustJoinRequiredChannel(true);
-        console.warn(
-          `ExplorerPage: required channel check failed (${mode})`,
-          error,
-        );
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const bootRequiredChannel = async () => {
-      const cfg = await loadRequiredChannelConfig();
-      if (cancelled) return;
-      setRequiredChannel(cfg);
-      await runRequiredChannelMembershipCheck(cfg, "bootstrap");
-    };
-    void bootRequiredChannel();
-    return () => {
-      cancelled = true;
-    };
-  }, [runRequiredChannelMembershipCheck]);
-
-  useEffect(() => {
-    if (!requiredChannel) {
-      return;
-    }
-    let unlisten: (() => void) | null = null;
-    listen<{ status?: string }>(
-      "required-channel-membership-changed",
-      (event) => {
-        const payload = event.payload;
-        if (!payload || typeof payload.status !== "string") {
-          return;
-        }
-        setMustJoinRequiredChannel(payload.status !== "member");
-      },
-    )
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch(() => {
-        // ignore
-      });
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [requiredChannel]);
-
-  const handleRequiredChannelConfirmed = useCallback(() => {
-    if (!requiredChannel) {
-      setMustJoinRequiredChannel(false);
-      return;
-    }
-    setMustJoinRequiredChannel(false);
-    void runRequiredChannelMembershipCheck(requiredChannel, "revalidate");
-  }, [requiredChannel, runRequiredChannelMembershipCheck]);
-
   const requestStructureBackup = useCallback(() => {
     // Cloud sync runs on an interval; this is kept as a callsite hook.
   }, []);
 
   return {
-    handleRequiredChannelConfirmed,
     isOffline,
-    mustJoinRequiredChannel,
     queueCloudSync,
     requestStructureBackup,
-    requiredChannel,
     setIsOffline,
   };
 }

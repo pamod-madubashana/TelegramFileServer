@@ -3,7 +3,6 @@ import { MessageCircle, X, Edit3 } from "lucide-react";
 import { ConfirmDialog } from "@/components/skybox/ConfirmDialog";
 import { ContextMenu } from "@/components/skybox/ContextMenu";
 import { FolderSettingsDialog } from "@/components/skybox/FolderSettingsDialog";
-import { RequiredChannelGate } from "@/components/skybox/RequiredChannelGate";
 import {
   ShareWidget,
   type TelegramContact,
@@ -14,7 +13,6 @@ import {
 } from "@/components/skybox/UploadConfirmWidget";
 import { TextInputDialog } from "@/components/skybox/TextInputDialog";
 import type { FileItem } from "@/components/skybox/FileRow";
-import type { RequiredChannelConfig } from "@/lib/required-channel";
 import type {
   ChatDriveCandidate,
   ClipboardMode,
@@ -124,9 +122,6 @@ interface ExplorerDialogsProps {
   >;
   onCloseChatDrivePicker: () => void;
   onConfirmChatDriveCandidate: (candidate: ChatDriveCandidate) => void;
-  mustJoinRequiredChannel: boolean;
-  requiredChannel: RequiredChannelConfig | null;
-  onRequiredChannelConfirmed: () => void;
 }
 
 interface ChatDrivePickerDialogProps {
@@ -323,9 +318,6 @@ export function ExplorerDialogs({
   setPendingChatDriveCandidate,
   onCloseChatDrivePicker,
   onConfirmChatDriveCandidate,
-  mustJoinRequiredChannel,
-  requiredChannel,
-  onRequiredChannelConfirmed,
 }: ExplorerDialogsProps) {
   return (
     <>
@@ -555,19 +547,13 @@ export function ExplorerDialogs({
         cancelLabel="Cancel"
         variant="primary"
         onCancel={() => setPendingChatDriveCandidate(null)}
-        onConfirm={() => {
-          const candidate = pendingChatDriveCandidate;
-          if (!candidate) return;
-          setPendingChatDriveCandidate(null);
-          onConfirmChatDriveCandidate(candidate);
-        }}
-      />
-
-      <RequiredChannelGate
-        isOpen={mustJoinRequiredChannel}
-        config={requiredChannel}
-        onMembershipConfirmed={onRequiredChannelConfirmed}
-      />
+          onConfirm={() => {
+            const candidate = pendingChatDriveCandidate;
+            if (!candidate) return;
+            setPendingChatDriveCandidate(null);
+            onConfirmChatDriveCandidate(candidate);
+          }}
+        />
     </>
   );
 }

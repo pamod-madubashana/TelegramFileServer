@@ -36,6 +36,7 @@ import {
 } from "@/lib/authEventTarget";
 
 const LoginPage = lazy(() => import("./pages/LoginPage"));
+const SetupPage = lazy(() => import("./pages/SetupPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const WindowTraySettingsPage = lazy(
@@ -279,6 +280,14 @@ const App = () => {
     const routes = [
       { path: "/", element: <LoadingPage /> },
       {
+        path: "/setup",
+        element: (
+          <RouteSuspense>
+            <SetupPage />
+          </RouteSuspense>
+        ),
+      },
+      {
         path: "/login",
         element: (
           <RouteSuspense>
@@ -385,9 +394,9 @@ const App = () => {
         ),
       },
     ];
-    // Browser serves the app under /webui/ (history routing); Tauri loads it from
-    // the origin root with hash routing, so it must not carry the basename.
-    return isTauri ? createHashRouter(routes) : createBrowserRouter(routes, { basename: '/webui' });
+    // Browser serves the app at the origin root (history routing: /login,
+    // /explorer, …); Tauri loads it from the origin root with hash routing.
+    return isTauri ? createHashRouter(routes) : createBrowserRouter(routes);
   }, []);
 
   useEffect(() => {

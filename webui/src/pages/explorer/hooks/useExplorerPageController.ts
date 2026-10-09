@@ -290,19 +290,13 @@ export function useExplorerPageController() {
     runDeleteTargetsRef.current(targets);
   }, []);
 
-  const {
-    handleRequiredChannelConfirmed,
-    isOffline,
-    mustJoinRequiredChannel,
-    queueCloudSync,
-    requestStructureBackup,
-    requiredChannel,
-  } = useExplorerCloudGate({
-    hasAttemptedSessionRestoreRef,
-    initialIsOffline,
-    isOfflineRef,
-    sessionDataRef,
-  });
+  const { isOffline, queueCloudSync, requestStructureBackup, setIsOffline } =
+    useExplorerCloudGate({
+      hasAttemptedSessionRestoreRef,
+      initialIsOffline,
+      isOfflineRef,
+      sessionDataRef,
+    });
 
   const {
     loadFavorites,
@@ -1361,8 +1355,5 @@ export function useExplorerPageController() {
     setPendingChatDriveCandidate,
     setIsChatDrivePickerOpen,
     handleConfirmChatDriveCandidate,
-    mustJoinRequiredChannel,
-    requiredChannel,
-    handleRequiredChannelConfirmed,
   };
 }

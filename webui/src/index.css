@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* SkyBox Design System - NUEXA Glass Dark Theme */
+/* TFS Design System - NUEXA Glass Dark Theme */
 
 @layer base {
   :root {
@@ -116,7 +116,10 @@
       "Helvetica Neue",
       Arial,
       sans-serif;
-    background: transparent !important;
+    /* Dark backdrop behind the glass panels (the old Tauri build used a
+       transparent window; in the browser nothing sits behind, so the
+       translucent shell washed out to white without this). */
+    background: hsl(var(--background)) !important;
     min-height: 100vh;
     overflow: hidden;
   }
@@ -126,7 +129,7 @@
   #root {
     height: 100%;
     overflow: hidden;
-    background: transparent !important;
+    background: hsl(var(--background)) !important;
   }
 
   /* Custom scrollbar */

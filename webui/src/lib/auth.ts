@@ -20,6 +20,38 @@ export interface AuthStatusResponse {
   registration: "owner" | "invite";
 }
 
+// ===== Account claim flow (username → verify in Telegram → password) =====
+
+/** POST /api/auth/claim/start payload — a one-time deep link to the bot. */
+export interface ClaimStartResponse {
+  username: string;
+  secret: string;
+  deep_link: string;
+}
+
+/** GET /api/auth/claim/status/:secret payload. */
+export interface ClaimStatusResponse {
+  status: "pending" | "verified" | "expired" | "unknown";
+  username: string | null;
+}
+
+/**
+ * POST /api/auth/claim/confirm payload — the account is created and a
+ * session token handed back, so the UI continues without a second login.
+ */
+export interface ClaimConfirmResponse {
+  token: string;
+  username: string;
+}
+
+/** GET /api/auth/claim/available?username= payload — create-screen gate. */
+export interface ClaimAvailableResponse {
+  username: string;
+  available: boolean;
+  /** Present when `available` is false — the reason to show the user. */
+  reason: string | null;
+}
+
 /** Admin-facing user view (mirrors the backend `UserSummary`). */
 export interface UserSummary {
   username: string;
@@ -112,6 +144,41 @@ export const fetchAuthStatus = (): Promise<AuthStatusResponse> =>
 /** GET /api/auth/me — current session profile (role + permissions). */
 export const fetchMe = (): Promise<MeResponse> =>
   apiJson<MeResponse>("/api/auth/me");
+
+/** Start an account claim: issues the one-time secret + t.me deep link. */
+export const claimStart = (username: string): Promise<ClaimStartResponse> =>
+  apiJson<ClaimStartResponse>("/api/auth/claim/start", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+
+/** Poll the claim: pending until the deep link is tapped in Telegram. */
+export const claimStatus = (secret: string): Promise<ClaimStatusResponse> =>
+  apiJson<ClaimStatusResponse>(
+    `/api/auth/claim/status/${encodeURIComponent(secret)}`,
+  );
+
+/** Finish a verified claim: creates the account, returns a session. */
+export const claimConfirm = (
+  secret: string,
+  password: string,
+): Promise<ClaimConfirmResponse> =>
+  apiJson<ClaimConfirmResponse>("/api/auth/claim/confirm", {
+    method: "POST",
+    body: JSON.stringify({ secret, password }),
+  });
+
+/**
+ * Pre-flight gate for the username-only create screen — no session, no
+ * Telegram. The Create Account button stays disabled until this says the
+ * name is claimable.
+ */
+export const claimAvailable = (
+  username: string,
+): Promise<ClaimAvailableResponse> =>
+  apiJson<ClaimAvailableResponse>(
+    `/api/auth/claim/available?username=${encodeURIComponent(username)}`,
+  );
 
 // ===== Self-service account settings =====
 

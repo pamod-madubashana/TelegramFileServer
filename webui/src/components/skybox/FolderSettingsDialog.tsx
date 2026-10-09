@@ -111,7 +111,7 @@ const folderIconModeOptions: Array<{
   {
     value: "default",
     label: "Default",
-    description: "Use the standard Skybox folder look.",
+    description: "Use the standard TFS folder look.",
   },
   {
     value: "auto",
@@ -620,7 +620,7 @@ export function FolderSettingsDialog({
           <div className="px-5 pt-5">
             <DialogTitle>Folder settings</DialogTitle>
             <DialogDescription>
-              Choose how this folder is classified and rendered in Skybox.
+              Choose how this folder is classified and rendered in TFS.
             </DialogDescription>
           </div>
         </DialogHeader>
@@ -663,7 +663,7 @@ export function FolderSettingsDialog({
               <div>
                 <Label className="text-sm font-semibold">Folder type</Label>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  This controls how Skybox classifies the folder. Collection
+                  This controls how TFS classifies the folder. Collection
                   types style library roots, while nested collection folders can
                   be assigned as Movie or TV items.
                 </p>
