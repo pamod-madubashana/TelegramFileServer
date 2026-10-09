@@ -18,17 +18,22 @@
 //! - Session persistence and recovery
 //! - Cooperative cancellation
 //! - FloodWait retry with backoff
+//! - Multi-bot pool: least-busy routing that starts a second bot under load
 
 pub mod client;
 pub mod engine;
 pub mod error;
 pub mod lookup;
+pub mod pool;
 pub mod types;
 
 pub use client::{GrammersClient, TelegramClient};
 pub use engine::TransferEngine;
 pub use error::{Result, TelegramError};
-pub use types::{DownloadRange, MediaType, SentMedia, TransferConfig};
+pub use pool::{ACTIVE_BOT_THRESHOLD, BotLease, BotPool};
+pub use types::{
+    CancellationToken, DownloadRange, DownloadSink, MediaType, SentMedia, TransferConfig,
+};
 
 #[cfg(test)]
 fn parse_range(range_header: &str, file_size: u64) -> (u64, u64) {

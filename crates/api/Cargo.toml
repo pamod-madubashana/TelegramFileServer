@@ -6,7 +6,7 @@ description = "API layer for TelegramFileServer v2 — setup wizard, auth, admin
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-axum = { workspace = true }
+axum = { workspace = true, features = ["multipart"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 mongodb = { workspace = true }
@@ -25,7 +25,11 @@ hex = "0.4"
 argon2 = { workspace = true }
 base64 = { workspace = true }
 password-hash = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-tempfile = "3.8"
+http-body-util = "0.1"
+tower = { version = "0.4", features = ["util"] }

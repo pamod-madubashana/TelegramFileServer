@@ -4,11 +4,19 @@ use argon2::{
 };
 use axum::{
     Router,
-    extract::{Json, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    body::Body,
+    extract::{Json, Multipart, Path, Query, State},
+    http::{
+        HeaderMap, HeaderValue, Method, StatusCode,
+        header::{
+            ACCEPT_RANGES, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE,
+            CONTENT_TYPE, RANGE, WWW_AUTHENTICATE,
+        },
+    },
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
+use bytes::Bytes;
 use futures::TryStreamExt;
 use mongodb::{
     Client, Collection,
@@ -31,8 +39,15 @@ use tfs_config::{
     create_setup_config, verify_and_decrypt,
 };
 use tfs_db::{DbError, connect, has_config, load_config, save_config};
-use tfs_telegram::{GrammersClient, TelegramClient, lookup as tg_lookup};
+use tfs_telegram::{
+    BotPool, CancellationToken, DownloadRange, GrammersClient, MediaType, TelegramClient,
+    TelegramError, TransferEngine, lookup as tg_lookup,
+};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
+
+mod files;
 
 /// Validate Step1Input manually (mirrors tfs-config validation)
 fn validate_step1(input: &Step1Input) -> Result<(), String> {
@@ -229,6 +244,11 @@ struct UserDoc {
     telegram_username: Option<String>,
     #[serde(default = "default_permissions")]
     permissions: Permissions,
+    /// Private Telegram chat that receives this account's uploads. `None`
+    /// means "use the setup wizard's `default_chat_id`" — the fallback for
+    /// accounts that have not opened a chat with the bot.
+    #[serde(default)]
+    storage_chat_id: Option<i64>,
     created_at: chrono::DateTime<chrono::Utc>,
     /// Username of the admin who created this account.
     /// `None` marks the owner account (bootstrap admin from config owner_id).
@@ -254,7 +274,7 @@ impl UserDoc {
     }
 }
 
-/// Database holding user documents.
+/// Database holding data documents.
 ///
 /// Defaults to the canonical `tfs_v2` database. `TFS_USER_DB` redirects it so
 /// an integration suite — which resets `v2_users` at the start of every test —
@@ -262,7 +282,11 @@ impl UserDoc {
 /// `pull_request` run overlapping a `push` run) delete each other's fixtures
 /// mid-test and fail spuriously. Unset in production, so behaviour there is
 /// unchanged.
-fn users_database_name() -> String {
+///
+/// `v2_files` lives here too: file records must land in whatever database the
+/// suite has claimed, otherwise a test that uploads would write production
+/// rows.
+fn data_database_name() -> String {
     std::env::var("TFS_USER_DB")
         .ok()
         .filter(|name| !name.is_empty())
@@ -271,7 +295,7 @@ fn users_database_name() -> String {
 
 fn get_users_collection(client: &mongodb::Client) -> Collection<UserDoc> {
     client
-        .database(&users_database_name())
+        .database(&data_database_name())
         .collection(UserDoc::COLLECTION_NAME)
 }
 
@@ -477,7 +501,11 @@ impl OwnerResolver {
 struct TelegramCreds {
     api_id: i32,
     api_hash: String,
+    /// First configured bot — used by the lookup client.
     bot_token: String,
+    /// Every configured bot, in wizard order. The transfer pool starts with
+    /// the first and adds more under load.
+    bot_tokens: Vec<String>,
     owner_id: i64,
     session_path: PathBuf,
 }
@@ -503,19 +531,21 @@ fn load_telegram_creds() -> Result<TelegramCreds, ApiError> {
                 "api_id missing from local config — re-run the setup wizard".to_string(),
             )
         })?;
-    let bot_token = local
+    let bot_tokens: Vec<String> = local
         .sensitive
         .bot_tokens
         .iter()
-        .find(|t| !t.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            ApiError::Telegram("no bot token in local config — re-run the setup wizard".to_string())
-        })?;
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let bot_token = bot_tokens.first().cloned().ok_or_else(|| {
+        ApiError::Telegram("no bot token in local config — re-run the setup wizard".to_string())
+    })?;
     Ok(TelegramCreds {
         api_id,
         api_hash: local.sensitive.api_hash,
         bot_token,
+        bot_tokens,
         owner_id: local.owner_id,
         // Dedicated session file: lookups must not contend with the transfer
         // engine's own session when it lands.
@@ -673,6 +703,7 @@ async fn auth_register(
                     telegram_user_id: owner_id,
                     telegram_username: Some(owner_name.clone()),
                     permissions: default_permissions(),
+                    storage_chat_id: None,
                     created_at: chrono::Utc::now(),
                     created_by: None,
                 };
@@ -943,6 +974,7 @@ async fn auth_change_username(
         telegram_user_id,
         telegram_username,
         permissions: me.permissions,
+        storage_chat_id: me.storage_chat_id,
         created_at: me.created_at,
         created_by: me.created_by.clone(),
     };
@@ -1144,6 +1176,8 @@ pub enum ApiError {
     Forbidden(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("telegram unavailable: {0}")]
@@ -1187,6 +1221,7 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone(), None),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone(), None),
             ApiError::Telegram(msg) => {
                 tracing::error!(error = %msg, "Telegram lookup unavailable");
                 (
@@ -1209,7 +1244,14 @@ impl IntoResponse for ApiError {
             Some(detail) => Json(serde_json::json!({ "error": error_message, "detail": detail })),
             None => Json(serde_json::json!({ "error": error_message })),
         };
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        // Tell a browser/player how to authenticate instead of failing silently.
+        if matches!(self, ApiError::Unauthorized(_)) {
+            response
+                .headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        response
     }
 }
 
@@ -1230,6 +1272,9 @@ pub struct AppState {
     /// every request, repeating that work and dropping the pool as soon as the
     /// response was written.
     mongo: Arc<tokio::sync::OnceCell<Client>>,
+    /// Lazily-built bot pool for uploads and streams. Nothing connects to
+    /// Telegram until the first transfer: the setup wizard may not have run.
+    transfer: Arc<tokio::sync::OnceCell<Arc<BotPool>>>,
 }
 
 impl AppState {
@@ -1240,6 +1285,7 @@ impl AppState {
             owner_resolver: OwnerResolver::from_env(),
             tg: Arc::new(tokio::sync::Mutex::new(None)),
             mongo: Arc::new(tokio::sync::OnceCell::new()),
+            transfer: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -1254,6 +1300,31 @@ impl AppState {
             .get_or_try_init(|| connect(&self.mongo_uri))
             .await?;
         Ok(client.clone())
+    }
+
+    /// The bot pool backing uploads and streams, built on first use from the
+    /// saved config.
+    ///
+    /// As with `mongo_client`, a failed build is not cached: a wizard that
+    /// has not run yet must not permanently disable transfers.
+    pub(crate) async fn transfer_pool(&self) -> Result<Arc<BotPool>, ApiError> {
+        let pool = self
+            .transfer
+            .get_or_try_init(|| async {
+                let creds = load_telegram_creds()?;
+                tracing::info!(
+                    "transfer pool ready with {} bot token(s)",
+                    creds.bot_tokens.len()
+                );
+                Ok::<Arc<BotPool>, ApiError>(BotPool::new(
+                    creds.api_id,
+                    creds.api_hash,
+                    creds.bot_tokens,
+                    &get_bin_dir(),
+                ))
+            })
+            .await?;
+        Ok(Arc::clone(pool))
     }
 
     /// Tests/dev: fixed owner identity, no Telegram involved.
@@ -1507,6 +1578,8 @@ struct UserSummary {
     username: String,
     role: String,
     permissions: Permissions,
+    /// Upload destination chat; `None` = the configured default chat.
+    storage_chat_id: Option<i64>,
     telegram_username: Option<String>,
     telegram_user_id: Option<i64>,
     /// False until the invited owner has set their password.
@@ -1523,6 +1596,7 @@ impl From<&UserDoc> for UserSummary {
             username: u.username.clone(),
             role: u.role.clone(),
             permissions: u.permissions,
+            storage_chat_id: u.storage_chat_id,
             telegram_username: u.telegram_username.clone(),
             telegram_user_id: u.telegram_user_id,
             claimed: u.claimed(),
@@ -1555,6 +1629,42 @@ struct AdminUpdateUserRequest {
     permissions: Option<PermissionsPatch>,
     #[serde(default)]
     role: Option<String>,
+    /// Three states: absent = leave alone, `null` = clear (fall back to the
+    /// default chat), number = set.
+    ///
+    /// Plain `Option<Option<i64>>` cannot express this: serde reads a JSON
+    /// `null` as "absent" on the outer option, so clearing would be
+    /// indistinguishable from not asking.
+    #[serde(default, deserialize_with = "patch_option")]
+    storage_chat_id: Option<Option<i64>>,
+}
+
+fn patch_option<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct PatchVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for PatchVisitor {
+        type Value = Option<Option<i64>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a chat id, or null to clear it")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Some(None))
+        }
+
+        fn visit_some<D2: serde::Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            Ok(Some(Some(i64::deserialize(deserializer)?)))
+        }
+    }
+
+    deserializer.deserialize_option(PatchVisitor)
 }
 
 /// Require a valid session AND the admin role; returns the acting user.
@@ -1627,6 +1737,7 @@ async fn admin_create_user(
         telegram_user_id,
         telegram_username,
         permissions: default_permissions(),
+        storage_chat_id: None,
         created_at: chrono::Utc::now(),
         created_by: Some(actor.username.clone()),
     };
@@ -1695,9 +1806,27 @@ async fn admin_update_user(
         fields.insert("permissions", bson_perms);
     }
 
+    if let Some(chat) = input.storage_chat_id {
+        match chat {
+            // 0 is never a valid Telegram chat id; negatives are groups/channels.
+            Some(0) => {
+                return Err(ApiError::Validation(
+                    "storage_chat_id must be a real chat id (0 is invalid, negatives are valid)"
+                        .to_string(),
+                ));
+            }
+            Some(id) => {
+                fields.insert("storage_chat_id", id);
+            }
+            None => {
+                fields.insert("storage_chat_id", bson::Bson::Null);
+            }
+        }
+    }
+
     if fields.is_empty() {
         return Err(ApiError::Validation(
-            "nothing to update — provide role and/or permissions".to_string(),
+            "nothing to update — provide role, permissions and/or storage_chat_id".to_string(),
         ));
     }
 
@@ -1775,6 +1904,359 @@ async fn admin_resync_user(
     Ok(Json(UserSummary::from(&updated)))
 }
 
+// ===== Telegram file transfer: upload, download, watch =====
+
+/// Where an upload goes: the account's own chat when it has one, otherwise
+/// the fallback chat from the setup wizard.
+fn storage_chat_for(user: &UserDoc, default_chat_id: i64) -> i64 {
+    user.storage_chat_id.unwrap_or(default_chat_id)
+}
+
+/// Fallback chat id from `v2_setup` (stored in the clear, next to the
+/// encrypted payload — no wizard password needed to serve files).
+async fn default_chat_id(client: &mongodb::Client) -> ApiResult<i64> {
+    let config = load_config(client).await?;
+    if config.default_chat_id == 0 {
+        return Err(ApiError::Telegram(
+            "no storage chat configured — finish the setup wizard".to_string(),
+        ));
+    }
+    Ok(config.default_chat_id)
+}
+
+/// One file spooled to disk, ready to be handed to Telegram.
+///
+/// `send_document` takes a path, so a multipart body has to land somewhere
+/// first; the temp file is removed when this value drops.
+struct StagedUpload {
+    file_name: String,
+    path: PathBuf,
+    size: u64,
+    _temp: tempfile::NamedTempFile,
+}
+
+/// Stream one multipart field into a temp file.
+async fn stage_upload(
+    file_name: &str,
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> ApiResult<StagedUpload> {
+    let temp = tempfile::Builder::new()
+        .prefix("tfs-upload-")
+        .tempfile()
+        .map_err(|e| ApiError::Internal(format!("could not create a temp file: {e}")))?;
+    let path = temp.path().to_path_buf();
+    let mut out = tokio::fs::File::create(&path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("could not open a temp file: {e}")))?;
+
+    let mut size = 0u64;
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| ApiError::Validation(format!("malformed upload body: {e}")))?
+    {
+        out.write_all(&chunk)
+            .await
+            .map_err(|e| ApiError::Internal(format!("could not write the upload: {e}")))?;
+        size += chunk.len() as u64;
+    }
+    out.flush()
+        .await
+        .map_err(|e| ApiError::Internal(format!("could not write the upload: {e}")))?;
+    drop(out);
+
+    Ok(StagedUpload {
+        file_name: file_name.to_string(),
+        path,
+        size,
+        _temp: temp,
+    })
+}
+
+/// POST /api/files/upload — multipart upload into Telegram.
+///
+/// Fields: `file` (required, the payload) and `path` (optional destination
+/// folder, e.g. `/Home/Images`).
+async fn files_upload(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> ApiResult<(StatusCode, Json<files::FileSummary>)> {
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.permissions.write {
+        return Err(ApiError::Forbidden(
+            "this account cannot upload files".to_string(),
+        ));
+    }
+
+    let mut folder: Option<String> = None;
+    let mut staged: Option<StagedUpload> = None;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::Validation(format!("malformed multipart body: {e}")))?
+    {
+        let name = field.name().map(str::to_string);
+        match name.as_deref() {
+            Some("path") => {
+                let raw = field
+                    .bytes()
+                    .await
+                    .map_err(|e| ApiError::Validation(format!("malformed path field: {e}")))?;
+                folder = Some(String::from_utf8_lossy(&raw).into_owned());
+            }
+            Some("file") if staged.is_none() => {
+                let raw_name = field.file_name().unwrap_or("upload.bin").to_string();
+                let file_name = files::sanitize_file_name(&raw_name)?;
+                staged = Some(stage_upload(&file_name, &mut field).await?);
+            }
+            _ => {
+                // Unknown or repeated fields are drained and ignored so the
+                // rest of the body stays in sync.
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let staged = staged
+        .ok_or_else(|| ApiError::Validation("missing \"file\" field in the upload".to_string()))?;
+    let folder = files::normalize_folder(folder.as_deref().unwrap_or(""), &staged.file_name);
+
+    let chat_id = storage_chat_for(&user, default_chat_id(&client).await?);
+    let extension = std::path::Path::new(&staged.file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    let media_type = MediaType::from_extension(&format!(".{extension}"));
+
+    let pool = state.transfer_pool().await?;
+    let lease = pool
+        .lease()
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let bot_index = lease.index() as i32;
+    let engine = TransferEngine::with_default_config(lease.client());
+    let sent = engine
+        .upload_file(
+            chat_id,
+            &staged.path,
+            None,
+            media_type,
+            &CancellationToken::new(),
+            None,
+        )
+        .await
+        .map_err(|e| ApiError::Telegram(format!("upload failed: {e}")))?;
+    drop(lease);
+
+    let doc = files::FileDoc::new(
+        &user.id,
+        &folder,
+        &staged.file_name,
+        staged.size,
+        &sent,
+        bot_index,
+    );
+    match files::insert_file(&client, &doc).await {
+        Ok(()) => {}
+        Err(DbError::Connection(e)) if e.to_string().contains("E11000") => {
+            return Err(ApiError::Conflict(
+                "a file with that name already exists in this folder".to_string(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
+
+    tracing::info!(
+        "stored {} in chat {} (bot {})",
+        doc.file_name,
+        doc.chat_id,
+        bot_index
+    );
+    Ok((StatusCode::CREATED, Json(files::FileSummary::new(&doc))))
+}
+
+/// GET /dl/{file_name} — the file as a download (`Content-Disposition:
+/// attachment`).
+async fn download_file(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    Path(file_name): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<files::MediaQuery>,
+) -> ApiResult<Response> {
+    serve_media(
+        &state,
+        &file_name,
+        false,
+        method,
+        &headers,
+        query.token.as_deref(),
+    )
+    .await
+}
+
+/// GET /watch/{file_name} — the same bytes served inline so a `<video>`
+/// element can stream and seek.
+async fn watch_file(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    Path(file_name): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<files::MediaQuery>,
+) -> ApiResult<Response> {
+    serve_media(
+        &state,
+        &file_name,
+        true,
+        method,
+        &headers,
+        query.token.as_deref(),
+    )
+    .await
+}
+
+/// Shared body of `/dl` and `/watch`: authorise, resolve the record, check
+/// the message still exists on Telegram, then answer the range request.
+async fn serve_media(
+    state: &Arc<AppState>,
+    file_name: &str,
+    inline: bool,
+    method: Method,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> ApiResult<Response> {
+    let owner = files::require_media_session(headers, query_token, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &owner)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.permissions.read {
+        return Err(ApiError::Forbidden(
+            "this account cannot download files".to_string(),
+        ));
+    }
+    let doc = files::find_file(&client, &user.id, file_name)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("file not found".to_string()))?;
+
+    // Pin the bot that stored the file: the others may not be able to see
+    // that chat at all.
+    let pool = state.transfer_pool().await?;
+    let slot = usize::try_from(doc.bot_index).map_err(|_| {
+        ApiError::Telegram(format!(
+            "file was stored by an unknown bot (slot {})",
+            doc.bot_index
+        ))
+    })?;
+    let lease = pool
+        .lease_slot(slot)
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let engine = TransferEngine::with_default_config(lease.client());
+
+    // One metadata read before committing to a status code: it is the only
+    // way to learn the size Telegram actually holds, and it proves the
+    // message still exists.
+    let media = engine
+        .get_media(doc.chat_id, doc.message_id)
+        .await
+        .map_err(|e| ApiError::Telegram(format!("could not read the file: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("file no longer exists on Telegram".to_string()))?;
+
+    let file_size = if media.file_size > 0 {
+        media.file_size
+    } else {
+        doc.file_size.max(0) as u64
+    };
+    let range =
+        files::parse_byte_range(headers.get(RANGE).and_then(|v| v.to_str().ok()), file_size);
+
+    let disposition = files::content_disposition(&doc.file_name, inline);
+    if let files::ByteRange::Unsatisfiable = range {
+        let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes */{file_size}")) {
+            response.headers_mut().insert(CONTENT_RANGE, value);
+        }
+        return Ok(response);
+    }
+
+    let status = if range.is_partial() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let mut builder = Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, doc.mime_type.clone())
+        .header(CONTENT_LENGTH, range.len(file_size))
+        .header(CONTENT_DISPOSITION, disposition)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CACHE_CONTROL, "public, max-age=3600, immutable");
+    if let files::ByteRange::Part { start, end } = range {
+        builder = builder.header(CONTENT_RANGE, format!("bytes {start}-{end}/{file_size}"));
+    }
+
+    // HEAD needs the headers and nothing else — no reason to pull the file
+    // out of Telegram for it.
+    if method == Method::HEAD || file_size == 0 {
+        return builder
+            .body(Body::empty())
+            .map_err(|e| ApiError::Internal(format!("response build failed: {e}")));
+    }
+
+    let (start, length) = match range {
+        files::ByteRange::Part { start, end } => (start, end - start + 1),
+        _ => (0, file_size),
+    };
+    let (chat_id, message_id, label) = (doc.chat_id, doc.message_id, doc.file_name.clone());
+
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    let cancel = CancellationToken::new();
+    tokio::spawn(async move {
+        // Held for the life of the stream: the pool counts this transfer
+        // until the last byte is out, not just until the headers.
+        let _lease = lease;
+        let mut sink = files::StreamSink::new(tx, cancel.clone());
+        let outcome = engine
+            .download_range(
+                chat_id,
+                message_id,
+                DownloadRange::new(start, length),
+                &mut sink,
+                &cancel,
+                None,
+            )
+            .await;
+        match outcome {
+            Ok(()) => tracing::debug!("finished streaming {}", label),
+            // A dropped receiver is the normal end of an aborted seek.
+            Err(TelegramError::Cancelled) => tracing::info!("stream of {} cancelled", label),
+            Err(e) => {
+                cancel.cancel();
+                tracing::warn!("stream of {} failed: {}", label, e);
+            }
+        }
+    });
+
+    // `mpsc::Receiver` is not itself a `futures::Stream`; unwrap it one
+    // message at a time so `Body::from_stream` has something to pull from.
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        let next = rx.recv().await;
+        next.map(|value| (value, rx))
+    });
+
+    builder
+        .body(Body::from_stream(stream))
+        .map_err(|e| ApiError::Internal(format!("response build failed: {e}")))
+}
+
 pub fn router(mongo_uri: String) -> Router {
     let state = Arc::new(AppState::new(mongo_uri));
     Router::new()
@@ -1798,6 +2280,11 @@ pub fn router(mongo_uri: String) -> Router {
             patch(admin_update_user).delete(admin_delete_user),
         )
         .route("/api/admin/users/:username/resync", post(admin_resync_user))
+        .route("/api/files/upload", post(files_upload))
+        // Catch-all so a file name may contain slashes (a pasted path) and a
+        // dot (every real file name).
+        .route("/dl/*file_name", get(download_file))
+        .route("/watch/*file_name", get(watch_file))
         .with_state(state)
 }
 
@@ -2240,6 +2727,109 @@ mod tests {
         assert_eq!(extract_bearer_token(&headers), None);
     }
 
+    // ===== Transfer routes (no database, no Telegram) =====
+
+    fn sample_user(storage_chat_id: Option<i64>) -> UserDoc {
+        UserDoc {
+            id: "alice".to_string(),
+            username: "alice".to_string(),
+            password_hash: None,
+            role: "user".to_string(),
+            telegram_user_id: None,
+            telegram_username: None,
+            permissions: default_permissions(),
+            storage_chat_id,
+            created_at: chrono::Utc::now(),
+            created_by: Some("admin".to_string()),
+        }
+    }
+
+    #[test]
+    fn storage_chat_uses_the_account_chat_and_otherwise_the_default() {
+        assert_eq!(storage_chat_for(&sample_user(None), -100123), -100123);
+        assert_eq!(storage_chat_for(&sample_user(Some(-42)), -100123), -42);
+    }
+
+    #[test]
+    fn storage_chat_patch_distinguishes_clear_from_absent() {
+        let absent: AdminUpdateUserRequest = serde_json::from_str("{}").unwrap();
+        assert!(absent.storage_chat_id.is_none());
+
+        let cleared: AdminUpdateUserRequest =
+            serde_json::from_str(r#"{"storage_chat_id": null}"#).unwrap();
+        assert_eq!(cleared.storage_chat_id, Some(None));
+
+        let set: AdminUpdateUserRequest =
+            serde_json::from_str(r#"{"storage_chat_id": -100500}"#).unwrap();
+        assert_eq!(set.storage_chat_id, Some(Some(-100500)));
+    }
+
+    /// The catch-all routes answer an unauthenticated caller with 401 +
+    /// `WWW-Authenticate` before a single Mongo or Telegram call happens.
+    #[tokio::test]
+    async fn media_routes_reject_unauthenticated_requests() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+
+        for uri in [
+            "/dl/movie.mp4",
+            "/watch/movie.mp4",
+            "/dl/Home%2FImages%2Fmovie.mp4",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(uri)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+            assert!(
+                response.headers().contains_key(WWW_AUTHENTICATE),
+                "{uri} should tell the client how to authenticate"
+            );
+        }
+    }
+
+    /// Routing only: unknown paths fall through to the 404 handler and
+    /// `/api/files/upload` accepts POST alone — neither touches a database.
+    #[tokio::test]
+    async fn media_routes_are_reachable_and_unknown_paths_404() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+
+        // Unknown paths never reach a handler.
+        let missing = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/no/such/route")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        // /api/files/upload exists but only for POST.
+        let wrong_method = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/files/upload")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
     // ===== Auth integration tests (require MongoDB) =====
     // Run with: cargo test -p tfs-api -- --ignored
     // These are marked #[ignore] per repo precedent (like test_connect_and_save_load in db tests)
@@ -2294,6 +2884,109 @@ mod tests {
             HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
         );
         headers
+    }
+
+    /// Media serving against a real database: credentials are checked
+    /// first, then the account and its read permission, then the file
+    /// lookup — all before any bot or Telegram call, so no bot token and
+    /// no `v2_files` row are needed to run this.
+    ///
+    /// Run with: cargo test -p tfs-api -- --ignored --test-threads=1
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn media_serving_authenticates_before_it_touches_telegram() {
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+        get_users_collection(&client)
+            .delete_many(doc! {})
+            .await
+            .unwrap();
+
+        let state = test_state(&uri);
+        let registered = auth_register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(registered.0.ok);
+
+        // No credentials at all.
+        let anonymous = serve_media(
+            &state,
+            "missing.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(anonymous, ApiError::Unauthorized(_)),
+            "expected Unauthorized, got {anonymous:?}"
+        );
+
+        // A token that is not a session.
+        let bogus = serve_media(
+            &state,
+            "missing.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            Some("not-a-real-session-token"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(bogus, ApiError::Unauthorized(_)),
+            "expected Unauthorized, got {bogus:?}"
+        );
+
+        // Authenticated owner, nobody stored that name — 404.
+        let token = create_session(&state.sessions, "testuser".to_string());
+        let missing = serve_media(
+            &state,
+            "missing.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            Some(&token),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(missing, ApiError::NotFound(_)),
+            "expected NotFound, got {missing:?}"
+        );
+
+        // An account without read permission stops before the file lookup.
+        let mut restricted = sample_user(None);
+        restricted.id = "readonly".to_string();
+        restricted.username = "readonly".to_string();
+        restricted.permissions.read = false;
+        get_users_collection(&client)
+            .insert_one(restricted)
+            .await
+            .unwrap();
+        let ro_token = create_session(&state.sessions, "readonly".to_string());
+        let denied = serve_media(
+            &state,
+            "missing.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            Some(&ro_token),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(denied, ApiError::Forbidden(_)),
+            "expected Forbidden, got {denied:?}"
+        );
     }
 
     // Multi-thread flavor: blocking Argon2 hashing in handlers would starve the
@@ -2644,12 +3337,55 @@ mod tests {
                     write: Some(false),
                 }),
                 role: None,
+                storage_chat_id: None,
             }),
         )
         .await
         .unwrap();
         assert!(updated.0.permissions.read);
         assert!(!updated.0.permissions.write);
+
+        // 4b. Storage chat: set it, refuse the invalid zero, then clear it.
+        let chat_set = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: None,
+                storage_chat_id: Some(Some(-100500)),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(chat_set.0.storage_chat_id, Some(-100500));
+
+        let zero_chat = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: None,
+                storage_chat_id: Some(Some(0)),
+            }),
+        )
+        .await;
+        assert!(matches!(zero_chat.unwrap_err(), ApiError::Validation(_)));
+
+        let chat_cleared = admin_update_user(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path("invited".to_string()),
+            Json(AdminUpdateUserRequest {
+                permissions: None,
+                role: None,
+                storage_chat_id: Some(None),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(chat_cleared.0.storage_chat_id, None);
 
         // 5. Guards: self role change, empty patch, unknown user, non-admin patch
         let self_role = admin_update_user(
@@ -2659,6 +3395,7 @@ mod tests {
             Json(AdminUpdateUserRequest {
                 permissions: None,
                 role: Some("user".to_string()),
+                storage_chat_id: None,
             }),
         )
         .await;
@@ -2673,6 +3410,7 @@ mod tests {
             Json(AdminUpdateUserRequest {
                 permissions: None,
                 role: None,
+                storage_chat_id: None,
             }),
         )
         .await;
@@ -2697,6 +3435,7 @@ mod tests {
             Json(AdminUpdateUserRequest {
                 permissions: None,
                 role: Some("admin".to_string()),
+                storage_chat_id: None,
             }),
         )
         .await;
@@ -3043,5 +3782,64 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(still_admin.0.username, "boss");
+    }
+
+    /// Media serving against a real database: the query token authenticates,
+    /// the account must exist, and an unknown name is a 404 — every one of
+    /// those decisions happens before any Telegram traffic, so no bot is
+    /// needed to run it.
+    ///
+    /// Run with: `TFS_USER_DB=tfs_v2_local_dev cargo test -p tfs-api -- --ignored --test-threads=1`
+    #[tokio::test]
+    #[ignore]
+    async fn media_serving_authenticates_before_it_reads_anything() {
+        let uri = test_mongo_uri();
+        let state = test_state(&uri);
+        let token = create_session(&state.sessions, "testuser".to_string());
+
+        let anonymous = serve_media(
+            &state,
+            "movie.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(anonymous, ApiError::Unauthorized(_)),
+            "expected Unauthorized, got {anonymous:?}"
+        );
+
+        let unknown = serve_media(
+            &state,
+            "definitely-not-here.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            Some(&token),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(unknown, ApiError::NotFound(_) | ApiError::Forbidden(_)),
+            "expected NotFound or Forbidden, got {unknown:?}"
+        );
+
+        let bogus_token = serve_media(
+            &state,
+            "movie.mp4",
+            false,
+            Method::GET,
+            &HeaderMap::new(),
+            Some("not-a-real-session-token"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(bogus_token, ApiError::Unauthorized(_)),
+            "expected Unauthorized, got {bogus_token:?}"
+        );
     }
 }
