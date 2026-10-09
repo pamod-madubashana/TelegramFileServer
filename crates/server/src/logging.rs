@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::fmt::MakeWriter;
 
-/// Where `--headless` writes its log.
+/// Where headless mode (the default) writes its log.
 pub fn log_path() -> PathBuf {
     tfs_config::appdata::get_bin_dir().join("tfs.log")
 }

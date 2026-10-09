@@ -14,6 +14,10 @@ pub enum DbError {
     Config(#[from] ConfigError),
     #[error("config not found")]
     NotFound,
+    #[error(
+        "MongoDB isn't configured yet — run the setup wizard, which stores your URI in config.tfs"
+    )]
+    NotConfigured,
     #[error("invalid data: {0}")]
     InvalidData(String),
 }
@@ -33,12 +37,14 @@ impl DbError {
 }
 
 /// Map a raw MongoDB driver error onto an actionable, non-technical message.
+/// The database is whatever URI the operator supplied (usually a cloud
+/// cluster), so nothing here may assume a server on this machine.
 /// Match order: most specific signals first (the generic timeout phrases appear
 /// inside almost every connection failure, so they must be checked last).
 fn friendly_connection_message(raw: &str) -> String {
     let l = raw.to_lowercase();
     if l.contains("actively refused") || l.contains("10061") {
-        "MongoDB isn't running at that address. Start MongoDB on this machine, or check the host and port in your URI."
+        "Nothing accepted the connection at that address. Check the host and port in your MongoDB URI — a cloud cluster is not on localhost."
             .to_string()
     } else if l.contains("no such host") || l.contains("lookup address") || l.contains("dns") {
         "The server name in your MongoDB URI could not be found. Check the hostname in the URI."
@@ -47,7 +53,7 @@ fn friendly_connection_message(raw: &str) -> String {
         "MongoDB rejected the username or password in your URI.".to_string()
     } else if l.contains("invalid uri") || l.contains("error parsing") || l.contains("parsing into")
     {
-        "Your MongoDB URI doesn't look valid. It should look like: mongodb://localhost:27017"
+        "Your MongoDB URI doesn't look valid. It should look like: mongodb+srv://<cluster>.mongodb.net/<database>"
             .to_string()
     } else if l.contains("certificate") || l.contains(" tls") || l.contains("ssl") {
         "The secure connection to MongoDB failed (certificate problem). Check the TLS settings in your URI."
@@ -58,10 +64,10 @@ fn friendly_connection_message(raw: &str) -> String {
         || l.contains("timed out")
         || l.contains("timeout")
     {
-        "Couldn't reach MongoDB in time. Check that MongoDB is running and that the host and port in your URI are correct."
+        "Couldn't reach MongoDB in time. Check that the cluster is reachable from this machine and that the host in your URI is correct."
             .to_string()
     } else {
-        "Couldn't connect to MongoDB. Check that MongoDB is running and that your URI is correct."
+        "Couldn't connect to MongoDB. Check your URI, and that the cluster allows connections from this machine's public IP (IP access list)."
             .to_string()
     }
 }
@@ -143,8 +149,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_connect_and_save_load() {
-        let uri = std::env::var("MONGODB_URI")
-            .unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+        let uri = std::env::var("MONGODB_URI").expect(
+            "set MONGODB_URI to your MongoDB URI (a cloud cluster) to run this test — \
+             no local server is assumed",
+        );
         let client = connect(&uri).await.unwrap();
 
         let step1 = Step1Input {
@@ -180,10 +188,21 @@ mod tests {
         // Real driver output captured from the setup wizard smoke test.
         let raw = "mongodb connection failed: Kind: Server selection timeout: No available servers. Topology: { Type: Unknown, Servers: [ { Address: localhost:27017, Type: Unknown, Error: Kind: I/O error: No connection could be made because the target machine actively refused it. (os error 10061), labels: {\"RetryableError\", \"SystemOverloadedError\"}, source: None, server response: None } ] }, labels: {}, source: None, server response: None";
         let msg = friendly_connection_message(raw);
-        assert!(msg.contains("isn't running"), "got: {msg}");
-        assert!(msg.contains("Start MongoDB"), "got: {msg}");
+        assert!(
+            msg.contains("Nothing accepted the connection"),
+            "got: {msg}"
+        );
+        // Never tell the operator to install a database on this machine.
+        assert!(!msg.contains("Start MongoDB"), "got: {msg}");
         assert!(!msg.contains("10061"), "raw detail leaked: {msg}");
         assert!(!msg.contains("Topology"), "raw detail leaked: {msg}");
+    }
+
+    #[test]
+    fn friendly_message_invalid_uri_points_at_a_cloud_example() {
+        let msg = friendly_connection_message("Error parsing into struct: missing scheme");
+        assert!(msg.contains("mongodb+srv://"), "got: {msg}");
+        assert!(!msg.contains("localhost"), "got: {msg}");
     }
 
     #[test]

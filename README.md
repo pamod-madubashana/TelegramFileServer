@@ -134,9 +134,11 @@ cargo build --workspace
 cargo run -p tfs                   # setup wizard on http://127.0.0.1:8090
 ```
 
-`crates/server` reads `PORT` (default `8090`) and `MONGO_URI` (default
-`mongodb://localhost:27017`), serves a `/healthz` probe, and hosts the setup page. It is a
-setup wizard, not a file server yet — see [v2 in progress](#v2-in-progress).
+`crates/server` reads `PORT` (default `8090`), serves a `/healthz` probe, and hosts the
+setup wizard. The MongoDB URI is not an environment variable and there is no local
+default: the wizard collects it (Atlas or any hosted MongoDB) and stores it encrypted in
+`config.tfs` beside the binary — the wizard password itself lives in appdata `data.tfs`.
+See [v2 in progress](#v2-in-progress).
 
 ## Configuration
 

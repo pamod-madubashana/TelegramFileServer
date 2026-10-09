@@ -1,32 +1,41 @@
-//! Command line surface: `tfs [--headless]`, `tfs --stop`.
+//! Command line surface: `tfs` (headless by default), `tfs --showlogs`,
+//! `tfs --stop`, `tfs --wipe-users --yes`.
 //!
-//! Headless means "no window, logs on disk, stoppable without a console".
-//! The default path is untouched — a console window with logs on stdout.
+//! Headless is the default: no window, logs on disk, stoppable without a
+//! console. `--showlogs` opts back into a console with logs on stdout.
 
 use anyhow::Context;
 use std::path::PathBuf;
 
 pub const HELP_FLAG: &str = "--help";
 pub const HEADLESS_FLAG: &str = "--headless";
+pub const SHOWLOGS_FLAG: &str = "--showlogs";
 pub const STOP_FLAG: &str = "--stop";
+pub const WIPE_FLAG: &str = "--wipe-users";
+pub const YES_FLAG: &str = "--yes";
 
 const USAGE: &str = "\
 TelegramFileServer
 
 USAGE:
-    tfs [--headless]
+    tfs [--showlogs]
     tfs --stop
+    tfs --wipe-users --yes
     tfs --help
 
 OPTIONS:
-    --headless   Run with no window; logs go to tfs.log beside the binary.
-    --stop       Stop a running background instance.
-    --help       Show this help.";
+    (default)     Run headless: no window; logs go to tfs.log beside the binary.
+    --showlogs    Run with a console; logs also go to stdout.
+    --headless    Accepted for compatibility — headless is already the default.
+    --stop        Stop a running background instance.
+    --wipe-users  Delete every user account (requires --yes).
+    --help        Show this help.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Serve { headless: bool },
     Stop,
+    WipeUsers,
 }
 
 /// Parse the arguments after argv[0].
@@ -34,13 +43,20 @@ pub enum Command {
 /// An unknown flag is a hard error: silently serving when the operator
 /// meant `--stop` would leave a process they think they killed.
 pub fn parse(args: impl IntoIterator<Item = String>) -> anyhow::Result<Command> {
-    let mut headless = false;
+    // Headless unless a console is asked for explicitly.
+    let mut showlogs = false;
+    let mut headless_flag = false;
     let mut stop = false;
+    let mut wipe = false;
+    let mut yes = false;
 
     for arg in args {
         match arg.as_str() {
-            HEADLESS_FLAG => headless = true,
+            SHOWLOGS_FLAG => showlogs = true,
+            HEADLESS_FLAG => headless_flag = true,
             STOP_FLAG => stop = true,
+            WIPE_FLAG => wipe = true,
+            YES_FLAG => yes = true,
             HELP_FLAG | "-h" => {
                 println!("{USAGE}");
                 std::process::exit(0);
@@ -49,14 +65,27 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> anyhow::Result<Command> 
         }
     }
 
-    if stop && headless {
-        anyhow::bail!("--stop cannot be combined with --headless\n\n{USAGE}");
+    if stop && (showlogs || headless_flag || wipe || yes) {
+        anyhow::bail!("--stop cannot be combined with the other flags\n\n{USAGE}");
+    }
+    if showlogs && headless_flag {
+        anyhow::bail!("--showlogs cannot be combined with --headless\n\n{USAGE}");
+    }
+    if wipe && (showlogs || headless_flag) {
+        anyhow::bail!("--wipe-users cannot be combined with serve flags\n\n{USAGE}");
+    }
+    if wipe && !yes {
+        anyhow::bail!("--wipe-users deletes every account — confirm with --yes\n\n{USAGE}");
     }
 
     Ok(if stop {
         Command::Stop
+    } else if wipe {
+        Command::WipeUsers
     } else {
-        Command::Serve { headless }
+        Command::Serve {
+            headless: !showlogs,
+        }
     })
 }
 
@@ -84,7 +113,7 @@ pub fn stop(port: u16) -> anyhow::Result<()> {
     let path = pid_file(port);
     let raw = std::fs::read_to_string(&path).with_context(|| {
         format!(
-            "no background instance recorded at {} — is one running with --headless?",
+            "no background instance recorded at {} — is one running?",
             path.display()
         )
     })?;
@@ -103,7 +132,8 @@ pub fn stop(port: u16) -> anyhow::Result<()> {
 }
 
 /// Windows console plumbing. The binary links as a no-console app so that
-/// `--headless` starts with no window; everything else asks for one here.
+/// the default headless serve starts with no window; `--showlogs` (and
+/// every other command) asks for one here.
 #[cfg(windows)]
 mod sys {
     #[link(name = "kernel32")]
@@ -299,16 +329,30 @@ mod tests {
     }
 
     #[test]
-    fn default_is_serve_with_a_console() {
-        assert_eq!(parse_args(&[]).unwrap(), Command::Serve { headless: false });
+    fn default_is_serve_headless() {
+        assert_eq!(parse_args(&[]).unwrap(), Command::Serve { headless: true });
     }
 
     #[test]
-    fn headless_flag_selects_background_mode() {
+    fn showlogs_flag_selects_console_mode() {
+        assert_eq!(
+            parse_args(&[SHOWLOGS_FLAG]).unwrap(),
+            Command::Serve { headless: false }
+        );
+    }
+
+    #[test]
+    fn headless_flag_still_selects_background_mode() {
         assert_eq!(
             parse_args(&[HEADLESS_FLAG]).unwrap(),
             Command::Serve { headless: true }
         );
+    }
+
+    #[test]
+    fn showlogs_and_headless_conflict() {
+        let err = parse_args(&[SHOWLOGS_FLAG, HEADLESS_FLAG]).unwrap_err();
+        assert!(err.to_string().contains("--showlogs cannot be combined"));
     }
 
     #[test]
@@ -317,8 +361,32 @@ mod tests {
     }
 
     #[test]
-    fn stop_cannot_be_combined_with_headless() {
+    fn stop_cannot_be_combined_with_serve_flags() {
         let err = parse_args(&[STOP_FLAG, HEADLESS_FLAG]).unwrap_err();
+        assert!(err.to_string().contains("--stop cannot be combined"));
+        let err = parse_args(&[STOP_FLAG, SHOWLOGS_FLAG]).unwrap_err();
+        assert!(err.to_string().contains("--stop cannot be combined"));
+    }
+
+    #[test]
+    fn wipe_requires_yes() {
+        let err = parse_args(&[WIPE_FLAG]).unwrap_err();
+        assert!(err.to_string().contains("confirm with --yes"));
+    }
+
+    #[test]
+    fn wipe_with_yes_is_its_own_command() {
+        assert_eq!(
+            parse_args(&[WIPE_FLAG, YES_FLAG]).unwrap(),
+            Command::WipeUsers
+        );
+    }
+
+    #[test]
+    fn wipe_cannot_be_combined_with_serve_or_stop() {
+        let err = parse_args(&[WIPE_FLAG, YES_FLAG, SHOWLOGS_FLAG]).unwrap_err();
+        assert!(err.to_string().contains("--wipe-users cannot be combined"));
+        let err = parse_args(&[STOP_FLAG, WIPE_FLAG, YES_FLAG]).unwrap_err();
         assert!(err.to_string().contains("--stop cannot be combined"));
     }
 

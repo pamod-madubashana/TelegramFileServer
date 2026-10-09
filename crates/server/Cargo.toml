@@ -14,6 +14,8 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 tfs-api = { path = "../api" }
 tfs-config = { path = "../config" }
+tfs-db = { path = "../db" }
+mongodb = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

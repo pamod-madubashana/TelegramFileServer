@@ -1,13 +1,16 @@
-// Link as a no-console app so `tfs --headless` starts with no window at all:
+// Link as a no-console app so a bare `tfs` starts with no window at all:
 // Windows creates a console window during process creation, before any of our
-// code can hide it. Default mode asks for a console back in `cli::ensure_console`.
+// code can hide it. `tfs --showlogs` asks for a console back in
+// `cli::ensure_console`.
 #![windows_subsystem = "windows"]
 
 use axum::{
     Router,
-    response::{IntoResponse, Json},
+    extract::Path,
+    response::{IntoResponse, Json, Redirect},
     routing::get,
 };
+use mongodb::bson::Document;
 use std::net::SocketAddr;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -21,11 +24,12 @@ mod logging;
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // Only a bare `--headless` is a background serve, and it is the one path
-    // that must never ask for a console. Everything else (default, --stop,
-    // --help, a typo) needs somewhere to write, so get a console first —
-    // before parse() has anything to print.
-    let background = args.len() == 1 && args[0] == cli::HEADLESS_FLAG;
+    // A bare invocation (or only the redundant --headless flag) is the
+    // default headless serve, and it must never ask for a console.
+    // Everything else (--showlogs, --stop, --wipe-users, --help, a typo)
+    // needs somewhere to write, so get a console first — before parse()
+    // has anything to print.
+    let background = args.iter().all(|a| a == cli::HEADLESS_FLAG);
     if background {
         cli::point_stdio_at(&logging::log_path())?;
     } else {
@@ -39,39 +43,46 @@ async fn main() -> anyhow::Result<()> {
             cli::stop(configured_port())?;
             return Ok(());
         }
+        cli::Command::WipeUsers => {
+            wipe_users().await?;
+            return Ok(());
+        }
         cli::Command::Serve { headless } => headless,
     };
 
-    let mongo_uri =
-        std::env::var("MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+    // The MongoDB URI lives in config.tfs, written by the setup wizard —
+    // no environment variable and no local-server default. Requests resolve
+    // it through tfs_config::load_connection, so a wizard finished while
+    // this process is already serving works without a restart.
     let port = configured_port();
 
     init_tracing(headless)?;
 
     let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
     let webui_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static/webui");
-    let webui_index = format!("{}/index.html", webui_dir);
 
-    // Serve /webui/ with SPA fallback: unknown paths → index.html (history routing).
-    // - Existing files (assets/*, index.html) served normally
-    // - Unknown subpaths (/webui/explorer, /webui/settings/...) → index.html
-    // - If index.html missing → 404 (ServeFile returns 404 on absent file)
-    // - /webui (no trailing slash) → redirect to /webui/ via append_index_html_on_directories
-    let webui_service = ServeDir::new(webui_dir)
-        .append_index_html_on_directories(true)
-        .fallback(ServeFile::new(webui_index));
-
-    // Main static files (icon.png, etc.) with fallback to setup.html for the wizard.
+    // The whole UI — setup wizard included — is the SPA at the origin root:
+    // /setup, /login, /explorer, /settings/… Lookup order for everything the
+    // API did not claim: static files (icon.png) → webui files (assets) →
+    // the SPA index itself (history routing for unknown paths).
     let serve_dir = ServeDir::new(static_dir)
         .append_index_html_on_directories(true)
-        .fallback(ServeFile::new(format!("{}/setup.html", static_dir)));
+        .fallback(
+            ServeDir::new(webui_dir)
+                .append_index_html_on_directories(true)
+                .fallback(ServeFile::new(format!("{}/index.html", webui_dir))),
+        );
 
     // tfs_api::router already registers absolute paths (/api/setup/*),
     // so merge it directly — do not nest it under another /api prefix.
+    // Old /webui/… URLs (bookmarks, pages cached from earlier builds) get a
+    // redirect to their new home at the origin root.
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .merge(api_router(mongo_uri))
-        .nest_service("/webui", webui_service)
+        .route("/webui", get(redirect_from_legacy_webui_root))
+        .route("/webui/*rest", get(redirect_from_legacy_webui))
+        .route("/setup.html", get(redirect_from_legacy_setup_html))
+        .merge(api_router(String::new()))
         .fallback_service(serve_dir);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -104,6 +115,30 @@ fn configured_port() -> u16 {
         .unwrap_or(8090)
 }
 
+/// `tfs --wipe-users --yes` — delete every account in `v2_users`.
+///
+/// The Mongo URI comes from the same saved connection the server uses
+/// (`config.tfs` + appdata `data.tfs`), so the operator never has to spell
+/// out credentials. Accounts only: sessions are in-memory and die with the
+/// process, files are untouched.
+async fn wipe_users() -> anyhow::Result<()> {
+    let Some(connection) = tfs_config::appdata::load_connection()? else {
+        anyhow::bail!(
+            "no saved connection — finish the setup wizard first \
+             (config.tfs or data.tfs is missing/unreadable)"
+        );
+    };
+
+    let client = tfs_db::connect(&connection.mongo_uri).await?;
+    let deleted = tfs_db::get_database(&client)
+        .collection::<Document>("v2_users")
+        .delete_many(mongodb::bson::doc! {})
+        .await?;
+
+    println!("removed {} user account(s)", deleted.deleted_count);
+    Ok(())
+}
+
 /// Console mode logs to stdout exactly as before; headless logs to
 /// `tfs.log` beside the binary, because there is no console to read. The
 /// file gets no colour codes — an operator `Get-Content`s it raw.
@@ -132,4 +167,22 @@ fn init_tracing(headless: bool) -> anyhow::Result<()> {
 async fn healthz() -> impl IntoResponse {
     let version = env!("CARGO_PKG_VERSION");
     Json(serde_json::json!({ "status": "ok", "version": version }))
+}
+
+/// The app moved from `/webui/…` to the origin root; keep old links working.
+async fn redirect_from_legacy_webui_root() -> Redirect {
+    Redirect::temporary("/")
+}
+
+async fn redirect_from_legacy_webui(Path(rest): Path<String>) -> Redirect {
+    if rest.is_empty() {
+        Redirect::temporary("/")
+    } else {
+        Redirect::temporary(&format!("/{rest}"))
+    }
+}
+
+/// The setup wizard moved into the SPA at /setup.
+async fn redirect_from_legacy_setup_html() -> Redirect {
+    Redirect::temporary("/setup")
 }

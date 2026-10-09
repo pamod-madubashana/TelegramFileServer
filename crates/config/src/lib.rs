@@ -373,9 +373,16 @@ pub fn open_container_payload(sealed: &[u8]) -> Result<Vec<u8>> {
 /// Create a new SetupConfig from step inputs
 pub fn create_setup_config(step1: &Step1Input, step2: &Step2Input) -> Result<SetupConfig> {
     // Manual validation (replaces validator::Validate derive)
-    if step1.mongo_uri.is_empty() {
+    let uri = step1.mongo_uri.trim();
+    if uri.is_empty() {
         return Err(ConfigError::Validation(
             "MongoDB URI is required".to_string(),
+        ));
+    }
+    let lower = uri.to_ascii_lowercase();
+    if !lower.starts_with("mongodb://") && !lower.starts_with("mongodb+srv://") {
+        return Err(ConfigError::Validation(
+            "MongoDB URI must start with mongodb+srv:// (cloud) or mongodb://".to_string(),
         ));
     }
     if step1.password.len() < 8 {
