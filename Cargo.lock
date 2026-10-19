@@ -3116,7 +3116,7 @@ dependencies = [
 
 [[package]]
 name = "tfs-api"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3146,15 +3146,15 @@ dependencies = [
 
 [[package]]
 name = "tfs-app-core"
-version = "0.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "tfs-auth"
-version = "0.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "tfs-config"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "aead",
  "anyhow",
@@ -3174,7 +3174,7 @@ dependencies = [
 
 [[package]]
 name = "tfs-db"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3187,16 +3187,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "tfs-fileserver-app"
-version = "0.1.0"
-
-[[package]]
 name = "tfs-jobs"
-version = "0.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "tfs-telegram"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
