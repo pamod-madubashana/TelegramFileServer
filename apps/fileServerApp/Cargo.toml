@@ -1,6 +1,0 @@
-[package]
-name = "tfs-fileserver-app"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-description = "Placeholder — planned cross-platform app (Windows/Linux/macOS/Android)"
