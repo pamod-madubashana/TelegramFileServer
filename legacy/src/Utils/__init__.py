@@ -1,1 +1,0 @@
-from ._text import smart_title
