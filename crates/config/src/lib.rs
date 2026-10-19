@@ -665,4 +665,6 @@ mod tests {
 }
 
 pub mod appdata;
-pub use appdata::{ConnectionStore, delete_connection, load_connection, save_connection};
+pub use appdata::{
+    ConnectionStore, delete_connection, get_thumbnail_dir, load_connection, save_connection,
+};

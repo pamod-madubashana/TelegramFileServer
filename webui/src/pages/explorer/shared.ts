@@ -544,23 +544,36 @@ export const getSavedMediaKind = (file: FileItem): SavedMediaKind | null => {
     extensionFromFileName(file.name) ||
     ""
   ).toLowerCase();
-  if (!extension) {
-    return null;
+
+  if (extension) {
+    if (IMAGE_EXTENSIONS.has(extension)) {
+      return "image";
+    }
+
+    if (VIDEO_EXTENSIONS.has(extension)) {
+      return "video";
+    }
+
+    if (AUDIO_EXTENSIONS.has(extension)) {
+      return "audio";
+    }
   }
 
-  if (IMAGE_EXTENSIONS.has(extension)) {
-    return "image";
+  // Telegram delivers voice notes and round videos with no filename at all,
+  // so there is no extension to read. The server already classified the
+  // message — trust that before giving up and forcing a download.
+  switch (file.fileType) {
+    case "photo":
+    case "image":
+      return "image";
+    case "video":
+      return "video";
+    case "audio":
+    case "voice":
+      return "audio";
+    default:
+      return null;
   }
-
-  if (VIDEO_EXTENSIONS.has(extension)) {
-    return "video";
-  }
-
-  if (AUDIO_EXTENSIONS.has(extension)) {
-    return "audio";
-  }
-
-  return null;
 };
 
 export const isSavedPreviewableFile = (file: FileItem): boolean =>
@@ -694,6 +707,7 @@ export const savedItemToFileItem = (item: TelegramSavedItem): FileItem => {
     size: item.file_size,
     modifiedAt: item.modified_date,
     extension: isTextMessage ? undefined : extensionFromFileName(resolvedName),
+    fileType: item.file_type,
     messageId: item.message_id > 0 ? item.message_id : undefined,
     thumbnail: resolveThumbnailSrc(item.thumbnail),
     caption: caption || undefined,

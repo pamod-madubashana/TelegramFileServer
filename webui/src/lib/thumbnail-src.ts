@@ -1,5 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+import { getAuthToken } from "@/lib/auth";
+
 const URL_PREFIXES = [
   "data:",
   "http://",
@@ -12,6 +14,19 @@ const URL_PREFIXES = [
 ];
 
 const WINDOWS_PATH_REGEX = /^[a-zA-Z]:[\\/]/;
+
+/**
+ * An `<img>` cannot set an `Authorization` header, so every server-relative
+ * preview URL carries the session token in the query - the same trick the
+ * media routes already use for `<video src>` and `<a download>`.
+ */
+const withSessionToken = (url: string): string => {
+  if (url.includes("token=")) {
+    return url;
+  }
+  const token = getAuthToken();
+  return token ? `${url}&token=${encodeURIComponent(token)}` : url;
+};
 
 export const resolveThumbnailSrc = (
   thumbnail?: string | null,
@@ -31,7 +46,7 @@ export const resolveThumbnailSrc = (
 
   // Server-relative URLs (/api/fs/media?…) need no conversion.
   if (value.startsWith("/")) {
-    return value;
+    return withSessionToken(value);
   }
 
   const normalizedPath = value.replace(/\\/g, "/");

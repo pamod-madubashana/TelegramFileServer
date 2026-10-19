@@ -76,13 +76,21 @@ export function useExplorerSelectionContext({
       }
     : null;
   const normalizedCurrentPath = normalizePath(currentPath);
+  // A finished upload lands in the listing before (or while) its queue entry
+  // leaves the in-progress states; drawing both puts a placeholder next to
+  // the file it is supposed to stand in for.
+  const presentNames = useMemo(
+    () => new Set(sortedFiles.map((file) => file.name)),
+    [sortedFiles],
+  );
   const uploadsForCurrentPath = uploadQueueItems.filter((item) => {
     const destinationPath = item.destinationVirtualPath
       ? normalizePath(item.destinationVirtualPath)
       : null;
     return (
       destinationPath === normalizedCurrentPath &&
-      (item.status === "queued" || isUploadQueueItemInProgress(item.status))
+      (item.status === "queued" || isUploadQueueItemInProgress(item.status)) &&
+      !presentNames.has(item.fileName)
     );
   });
   const uploadPlaceholderItem = uploadsForCurrentPath.find((item) =>

@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { FolderArtwork } from "@/components/skybox/FolderArtwork";
 import { resolveThumbnailSrc } from "@/lib/thumbnail-src";
+import { useProgressiveThumbnail } from "@/lib/use-progressive-thumbnail";
 import { ThemedFileIcon } from "@/components/skybox/fileIcons";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type FolderSettings } from "@/lib/folder-settings";
@@ -14,6 +13,8 @@ export interface FileItem {
   size?: number;
   modifiedAt?: string;
   extension?: string;
+  /** Server-side media type (`photo`, `video`, `audio`, `document`, `text`). */
+  fileType?: string;
   messageId?: number;
   chatId?: number;
   thumbnail?: string;
@@ -85,93 +86,19 @@ export function FileRow({
   isDropTarget,
   isDropSuccess,
 }: FileRowProps) {
-  const [thumbUrl, setThumbUrl] = useState<string | undefined>(
-    resolveThumbnailSrc(file.thumbnail),
-  );
-  const [isFetchingThumbnail, setIsFetchingThumbnail] = useState<boolean>(
-    () => {
-      const resolved = resolveThumbnailSrc(file.thumbnail);
-      return (
-        !resolved &&
-        !!file.messageId &&
-        !file.isDirectory &&
-        !file.isNoteMessage
-      );
-    },
-  );
-  const [hasRetriedBrokenThumbnail, setHasRetriedBrokenThumbnail] =
-    useState(false);
+  // Paint the cheap preview the listing already advertises, then upgrade to
+  // the larger tier once the server has it cached and the browser decodes it.
+  const { thumbUrl, isFetchingThumbnail, dismissThumbnail } =
+    useProgressiveThumbnail(
+      file.isUploading ? undefined : resolveThumbnailSrc(file.thumbnail),
+      file.isDirectory || file.isNoteMessage ? undefined : file.messageId,
+    );
   const showThumbnailPlaceholder =
     !file.isDirectory &&
     !!file.messageId &&
     !thumbUrl &&
     !file.isNoteMessage &&
     isFetchingThumbnail;
-
-  useEffect(() => {
-    const resolved = resolveThumbnailSrc(file.thumbnail);
-    setThumbUrl(resolved);
-    setHasRetriedBrokenThumbnail(false);
-    setIsFetchingThumbnail(
-      !file.isUploading &&
-        !resolved &&
-        !!file.messageId &&
-        !file.isDirectory &&
-        !file.isNoteMessage,
-    );
-  }, [
-    file.isDirectory,
-    file.isNoteMessage,
-    file.isUploading,
-    file.messageId,
-    file.thumbnail,
-  ]);
-
-  useEffect(() => {
-    if (file.isUploading || thumbUrl || !file.messageId) {
-      return;
-    }
-
-    void refetchThumbnail();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.messageId, thumbUrl]);
-
-  const refetchThumbnail = async () => {
-    if (!file.messageId) {
-      setThumbUrl(undefined);
-      setIsFetchingThumbnail(false);
-      return;
-    }
-
-    if (hasRetriedBrokenThumbnail) {
-      setThumbUrl(undefined);
-      setIsFetchingThumbnail(false);
-      return;
-    }
-
-    setHasRetriedBrokenThumbnail(true);
-    setIsFetchingThumbnail(true);
-
-    try {
-      const result: string | null = await invoke("tg_get_message_thumbnail", {
-        messageId: file.messageId,
-      });
-      const resolved = resolveThumbnailSrc(result);
-      if (resolved) {
-        setThumbUrl(resolved);
-        return;
-      }
-    } catch (e) {
-      console.error(
-        "Failed to refetch missing thumbnail for message:",
-        file.messageId,
-        e,
-      );
-    }
-
-    setThumbUrl(undefined);
-    setIsFetchingThumbnail(false);
-  };
 
   if (file.isNoteMessage) {
     return (
@@ -228,9 +155,7 @@ export function FileRow({
             src={thumbUrl}
             alt={file.name}
             className="w-full h-full object-cover"
-            onError={() => {
-              void refetchThumbnail();
-            }}
+              onError={dismissThumbnail}
           />
         ) : file.isDirectory ? (
           <FolderArtwork

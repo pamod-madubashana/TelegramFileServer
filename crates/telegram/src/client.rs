@@ -7,8 +7,9 @@ use grammers_client::sender::SenderPool;
 use grammers_client::{
     Client,
     client::ClientConfiguration,
-    media::{Media, Uploaded},
+    media::{Media, PhotoSize, Uploaded},
     message::{InputMessage, Message},
+    tl,
 };
 use grammers_session::storages::SqliteSession;
 use grammers_session::updates::UpdatesLike;
@@ -20,8 +21,8 @@ use tracing::info;
 
 use crate::error::{Result, TelegramError};
 use crate::types::{
-    CancellationToken, DownloadRange, DownloadSink, MediaType, SentMedia, TransferConfig,
-    TransferProgress,
+    CancellationToken, DownloadRange, DownloadSink, MediaType, SentMedia, ThumbnailQuality,
+    TransferConfig, TransferProgress,
 };
 
 /// Application-facing Telegram client trait
@@ -247,6 +248,155 @@ impl GrammersClient {
         message.media()
     }
 
+    /// Extension Telegram's `mime` implies, when we recognise it.
+    fn extension_for_mime(mime: &str) -> Option<&'static str> {
+        let ext = match mime {
+            "video/mp4" => "mp4",
+            "video/quicktime" => "mov",
+            "video/webm" => "webm",
+            "video/x-matroska" => "mkv",
+            "video/x-msvideo" => "avi",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" => "m4a",
+            "audio/aac" => "aac",
+            "audio/ogg" => "ogg",
+            "audio/wav" | "audio/x-wav" => "wav",
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            _ => return None,
+        };
+        Some(ext)
+    }
+
+    /// Telegram hands over voice notes and round videos with **no filename at
+    /// all**, and others extensionless (`videoplayback`). The explorer sorts
+    /// files by name and classifies them by extension to decide whether to
+    /// play them inline, and the OS uses the same extension to pick a player —
+    /// so a nameless video ended up as a literal `unknown` row that nothing
+    /// could open. Give those a stable `<stem>-<message_id>.<ext>` name; the
+    /// message id keeps two nameless videos from collapsing onto one row (the
+    /// VFS keys a file by owner+path+name).
+    fn document_file_name(raw: &str, mime: &str, media_type: MediaType, message_id: i32) -> String {
+        let trimmed = raw.trim();
+        let unnamed = trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown");
+        let extensionless = unnamed || Path::new(trimmed).extension().is_none();
+        if !extensionless {
+            return trimmed.to_string();
+        }
+
+        let ext = Self::extension_for_mime(mime).unwrap_or(match media_type {
+            MediaType::Video => "mp4",
+            MediaType::Audio | MediaType::Voice => "mp3",
+            MediaType::Photo => "jpg",
+            _ => "bin",
+        });
+        let stem = if unnamed {
+            match media_type {
+                MediaType::Video => "video",
+                MediaType::Audio | MediaType::Voice => "audio",
+                MediaType::Photo => "photo",
+                _ => "document",
+            }
+        } else {
+            trimmed
+        };
+        format!("{stem}-{message_id}.{ext}")
+    }
+
+    /// Fetch the thumbnail attached to one message.
+    ///
+    /// Telegram ships several sizes with a photo or a video document. `Low`
+    /// takes the cheapest one it can find - preferring bytes already embedded
+    /// in the message object, which cost no extra download at all - while
+    /// `High` takes the largest it will serve without handing over the whole
+    /// file. Returns JPEG bytes, or `None` when the message carries no usable
+    /// thumbnail.
+    pub async fn download_message_thumbnail(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        quality: ThumbnailQuality,
+    ) -> Result<Option<Vec<u8>>> {
+        let peer = self.resolve_peer(chat_id).await?;
+        let client = self.ensure_connected().await?;
+        let messages = client.get_messages_by_id(peer, &[message_id]).await?;
+
+        // A deleted or unknown id comes back as a MessageEmpty placeholder
+        // rather than as nothing, so reuse the guard the history walk relies
+        // on instead of mistaking the placeholder for a real message.
+        let Some(Some(message)) = messages.into_iter().next() else {
+            return Ok(None);
+        };
+        if !Self::message_exists(&message) {
+            return Ok(None);
+        }
+        let Some(media) = Self::extract_media_from_message(&message) else {
+            return Ok(None);
+        };
+
+        let thumbs = match &media {
+            Media::Document(doc) => doc.thumbs(),
+            Media::Photo(photo) => photo.thumbs(),
+            // Stickers, polls and web previews carry art that is not a
+            // listing thumbnail.
+            _ => return Ok(None),
+        };
+        let Some(chosen) = Self::pick_thumbnail(&thumbs, quality) else {
+            return Ok(None);
+        };
+
+        // `iter_download` short-circuits when the size already carries its
+        // own bytes (Cached/Stripped), so the cheapest previews never reach
+        // the network at all.
+        let mut download = client.iter_download(chosen);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = download.next().await? {
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(bytes))
+    }
+
+    /// Choose which of a message's thumbnails to fetch.
+    ///
+    /// Telegram marks sizes it has dropped as `Empty`, and `Stripped`/`Path`
+    /// are pseudo-sizes holding data the client is meant to decode or render
+    /// itself rather than a usable grid preview.
+    fn pick_thumbnail(thumbs: &[PhotoSize], quality: ThumbnailQuality) -> Option<&PhotoSize> {
+        let present = |t: &&PhotoSize| !matches!(t, PhotoSize::Empty(_));
+
+        match quality {
+            ThumbnailQuality::Low => thumbs
+                .iter()
+                .filter(|t| present(&t))
+                // Bytes already on the message object cost nothing to serve.
+                .find(|t| matches!(t, PhotoSize::Cached(c) if !c.bytes.is_empty()))
+                .or_else(|| {
+                    thumbs
+                        .iter()
+                        .filter(|t| present(&t))
+                        .find(|t| matches!(t, PhotoSize::Stripped(s) if !s.bytes.is_empty()))
+                })
+                .or_else(|| {
+                    thumbs
+                        .iter()
+                        .filter(|t| present(&t))
+                        .min_by_key(|t| t.size())
+                }),
+            ThumbnailQuality::High => thumbs
+                .iter()
+                .filter(|t| {
+                    present(&t) && !matches!(t, PhotoSize::Stripped(_) | PhotoSize::Path(_))
+                })
+                .max_by_key(|t| t.size())
+                .or_else(|| thumbs.iter().filter(|t| present(&t)).max_by_key(|t| t.size())),
+        }
+    }
+
     fn extract_sent_media(&self, message: &Message) -> Result<SentMedia> {
         let media =
             Self::extract_media_from_message(message).ok_or(TelegramError::FileNotFound {
@@ -278,7 +428,7 @@ impl GrammersClient {
                         doc.id().to_string(), // No file_unique_id in grammers 0.10, use id as fallback
                         doc.size().unwrap_or(0) as u64,
                         mime.to_string(),
-                        doc.name().unwrap_or("unknown").to_string(),
+                        doc.name().unwrap_or("").to_string(),
                         determined_type,
                         doc.thumbs().first().map(|t| t.photo_type()),
                     )
@@ -291,7 +441,10 @@ impl GrammersClient {
                         photo.id().to_string(), // No file_unique_id for photos in grammers 0.10
                         photo.size().unwrap_or(0) as u64,
                         "image/jpeg".to_string(),
-                        "photo.jpg".to_string(),
+                        // Telegram photos carry no filename. Every one used
+                        // to be stored as "photo.jpg", so a chat with three
+                        // photos kept exactly one of them.
+                        format!("photo-{}.jpg", message.id()),
                         MediaType::Photo,
                         Some(largest.photo_type()),
                     )
@@ -308,6 +461,11 @@ impl GrammersClient {
 
         // Get DC ID from file ID (decode the packed file ID)
         let dc_id = self.extract_dc_id(&file_id).unwrap_or(0);
+
+        // Normalise the name last: it may need the mime and media type the
+        // branches above decided on.
+        let file_name =
+            Self::document_file_name(&file_name, &mime_type, media_type, message.id());
 
         Ok(SentMedia {
             chat_id: message.peer_id().bot_api_dialog_id().unwrap_or(0),
@@ -348,30 +506,27 @@ impl GrammersClient {
         Ok(uploaded)
     }
 
-    fn build_input_message(
-        &self,
-        uploaded: Uploaded,
-        caption: Option<&str>,
-        media_type: MediaType,
-    ) -> InputMessage {
-        let caption = caption.unwrap_or("");
-        // Send **everything** as a document. Routing images through
-        // `.photo()` makes Telegram re-encode and validate them, which fails
-        // with `PHOTO_EXT_INVALID` for files whose bytes aren't a photo
-        // Telegram accepts — and would lossily recompress genuine photos
-        // anyway. A file server must store the exact original bytes, so we
-        // upload as a document (grammers preserves the filename via
-        // `DocumentAttributeFilename` and infers the mime type) and keep the
-        // image/video/audio classification only for folder + gallery routing.
-        match media_type {
-            MediaType::Photo
-            | MediaType::Video
-            | MediaType::Audio
-            | MediaType::Voice
-            | MediaType::Animation
-            | MediaType::Document
-            | MediaType::Sticker => InputMessage::new().document(uploaded).text(caption),
+    /// Whether Telegram should receive this upload as a photo rather than a
+    /// document.
+    ///
+    /// Only files the explorer already classifies as photos qualify, and only
+    /// with an extension Telegram itself recognises as an image: a name that
+    /// disagrees with the bytes is rejected outright with
+    /// `PHOTO_EXT_INVALID`, which is exactly what the fallback in
+    /// [`GrammersClient::send_document`] is for.
+    fn as_uploaded_photo(file_path: &Path, media_type: MediaType) -> bool {
+        if media_type != MediaType::Photo {
+            return false;
         }
+        file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "jpg" | "jpeg" | "png" | "webp" | "bmp"
+                )
+            })
     }
 
     /// Resolve a chat_id (Bot API dialog ID) to a PeerRef carrying the real
@@ -415,6 +570,17 @@ impl GrammersClient {
         Ok(peer)
     }
 
+    /// `getMessagesByIDs` answers a *missing* id with a `MessageEmpty`
+    /// placeholder instead of omitting it, and grammers still wraps that
+    /// placeholder in a `Message`: its `peer_id()` falls back to the peer we
+    /// asked for, so it survives grammers' own peer filter. Treating those
+    /// placeholders as real made every gallop probe "exist", so the bracket
+    /// climbed to `i32::MAX` and the history walk spun over ~21M dead ids
+    /// publishing an identical 0% progress snapshot forever.
+    fn message_exists(message: &Message) -> bool {
+        !matches!(message.raw, tl::enums::Message::Empty(_))
+    }
+
     /// Find the newest message id in a chat by probing `getMessagesByIDs`
     /// (bots cannot call `messages.getHistory`). Returns 0 for an empty or
     /// inaccessible chat.
@@ -434,7 +600,11 @@ impl GrammersClient {
         loop {
             let probe_id = step.min(i64::from(i32::MAX)) as i32;
             let probe = client.get_messages_by_id(peer, &[probe_id]).await?;
-            if probe.first().and_then(|m| m.as_ref()).is_some() {
+            if probe
+                .first()
+                .and_then(|m| m.as_ref())
+                .is_some_and(Self::message_exists)
+            {
                 best = probe_id;
             }
             if step >= i64::from(i32::MAX) {
@@ -452,7 +622,7 @@ impl GrammersClient {
             let max = res
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| m.as_ref().is_some())
+                .filter(|(_, m)| m.as_ref().is_some_and(Self::message_exists))
                 .map(|(i, _)| i as i32 + 1)
                 .max();
             return Ok(max.unwrap_or(0));
@@ -468,7 +638,7 @@ impl GrammersClient {
             let start = (id - BATCH + 1).max(best + 1);
             let ids: Vec<i32> = (start..=id).rev().collect();
             let res = client.get_messages_by_id(peer, &ids).await?;
-            if let Some((idx, _)) = res.iter().enumerate().find(|(_, m)| m.as_ref().is_some()) {
+            if let Some((idx, _)) = res.iter().enumerate()                .find(|(_, m)| m.as_ref().is_some_and(Self::message_exists)) {
                 return Ok(ids[idx]);
             }
             id = start - 1;
@@ -590,8 +760,41 @@ impl TelegramClient for GrammersClient {
         let uploaded = self
             .upload_file_with_progress(client, file_path, None)
             .await?;
-        let input_message = self.build_input_message(uploaded, caption, media_type);
+        let caption = caption.unwrap_or("");
 
+        // Images are sent as photos so Telegram attaches a thumbnail the
+        // explorer can show without downloading the file. Telegram re-encodes
+        // a photo upload, so anything it will not take - a mislabelled
+        // extension, an image it will not decode - falls back to a document
+        // and keeps its exact bytes, which is how every other type always
+        // goes out anyway.
+        if Self::as_uploaded_photo(file_path, media_type) {
+            match client
+                .send_message(peer, InputMessage::new().photo(uploaded.clone()).text(caption))
+                .await
+            {
+                Ok(message) => {
+                    let mut sent = self.extract_sent_media(&message)?;
+                    // A photo message carries no filename, so
+                    // `extract_sent_media` would hand back `photo-<id>.jpg`
+                    // and rename the file the moment it was sent. Keep the
+                    // name the uploader chose.
+                    if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
+                        sent.file_name = name.to_string();
+                    }
+                    return Ok(sent);
+                }
+                Err(error) => {
+                    info!(
+                        path = %file_path.display(),
+                        error = %error,
+                        "telegram refused the photo; sending it as a document"
+                    );
+                }
+            }
+        }
+
+        let input_message = InputMessage::new().document(uploaded).text(caption);
         let message = client.send_message(peer, input_message).await?;
 
         self.extract_sent_media(&message)
@@ -917,5 +1120,60 @@ impl TelegramClient for GrammersClient {
             }
         }
         Ok(Some(bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nameless_media_gains_an_extension_and_a_message_id() {
+        assert_eq!(
+            GrammersClient::document_file_name("", "video/mp4", MediaType::Video, 17),
+            "video-17.mp4"
+        );
+        assert_eq!(
+            GrammersClient::document_file_name("unknown", "audio/mpeg", MediaType::Audio, 9),
+            "audio-9.mp3"
+        );
+    }
+
+    #[test]
+    fn extensionless_names_keep_their_stem() {
+        assert_eq!(
+            GrammersClient::document_file_name("videoplayback", "video/mp4", MediaType::Video, 4),
+            "videoplayback-4.mp4"
+        );
+    }
+
+    #[test]
+    fn names_that_already_have_an_extension_are_untouched() {
+        assert_eq!(
+            GrammersClient::document_file_name(
+                "clip.mkv",
+                "video/x-matroska",
+                MediaType::Video,
+                1
+            ),
+            "clip.mkv"
+        );
+    }
+
+    #[test]
+    fn only_images_qualified_for_a_photo_upload() {
+        let image = |name: &str| {
+            GrammersClient::as_uploaded_photo(std::path::Path::new(name), MediaType::Photo)
+        };
+        assert!(image("icon.PNG"));
+        assert!(image("/tmp/photo.jpeg"));
+        assert!(image("shot.webp"));
+        assert!(!image("archive.zip"));
+        assert!(!image("noextension"));
+        // Videos and audio never take the photo path, whatever they are called.
+        assert!(!GrammersClient::as_uploaded_photo(
+            std::path::Path::new("clip.jpg"),
+            MediaType::Video
+        ));
     }
 }

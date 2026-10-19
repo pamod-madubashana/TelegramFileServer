@@ -1,8 +1,7 @@
 import { FileItem, formatFileSize } from "./FileRow";
-import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { resolveThumbnailSrc } from "@/lib/thumbnail-src";
+import { useProgressiveThumbnail } from "@/lib/use-progressive-thumbnail";
 import { ThemedFileIcon } from "@/components/skybox/fileIcons";
 import Folder from "@/components/skybox/Folder";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -158,22 +157,13 @@ function FileGridItem({
   onDrop,
   galleryMode = false,
 }: FileGridItemProps) {
-  const [thumbUrl, setThumbUrl] = useState<string | undefined>(
-    resolveThumbnailSrc(file.thumbnail),
-  );
-  const [isFetchingThumbnail, setIsFetchingThumbnail] = useState<boolean>(
-    () => {
-      const resolved = resolveThumbnailSrc(file.thumbnail);
-      return (
-        !resolved &&
-        !!file.messageId &&
-        !file.isDirectory &&
-        !file.isNoteMessage
-      );
-    },
-  );
-  const [hasRetriedBrokenThumbnail, setHasRetriedBrokenThumbnail] =
-    useState(false);
+  // Paint the cheap preview the listing already advertises, then upgrade to
+  // the larger tier once the server has it cached and the browser decodes it.
+  const { thumbUrl, isFetchingThumbnail, dismissThumbnail } =
+    useProgressiveThumbnail(
+      file.isUploading ? undefined : resolveThumbnailSrc(file.thumbnail),
+      file.isDirectory || file.isNoteMessage ? undefined : file.messageId,
+    );
   const VideoSymbol = getDefaultFolderSymbol("Videos", "tg://saved/Videos");
   const showThumbnailPlaceholder =
     !file.isDirectory &&
@@ -181,71 +171,6 @@ function FileGridItem({
     !thumbUrl &&
     !file.isNoteMessage &&
     isFetchingThumbnail;
-
-  useEffect(() => {
-    const resolved = resolveThumbnailSrc(file.thumbnail);
-    setThumbUrl(resolved);
-    setHasRetriedBrokenThumbnail(false);
-    setIsFetchingThumbnail(
-      !file.isUploading &&
-        !resolved &&
-        !!file.messageId &&
-        !file.isDirectory &&
-        !file.isNoteMessage,
-    );
-  }, [
-    file.isDirectory,
-    file.isNoteMessage,
-    file.isUploading,
-    file.messageId,
-    file.thumbnail,
-  ]);
-
-  useEffect(() => {
-    if (file.isUploading || thumbUrl || !file.messageId) {
-      return;
-    }
-
-    void refetchThumbnail();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.messageId, thumbUrl]);
-
-  const refetchThumbnail = async () => {
-    if (!file.messageId) {
-      setThumbUrl(undefined);
-      setIsFetchingThumbnail(false);
-      return;
-    }
-
-    if (hasRetriedBrokenThumbnail) {
-      setThumbUrl(undefined);
-      setIsFetchingThumbnail(false);
-      return;
-    }
-
-    setHasRetriedBrokenThumbnail(true);
-    setIsFetchingThumbnail(true);
-
-    try {
-      const result: string | null = await invoke("tg_get_message_thumbnail", {
-        messageId: file.messageId,
-      });
-      const resolved = resolveThumbnailSrc(result);
-      if (resolved) {
-        setThumbUrl(resolved);
-        return;
-      }
-    } catch (e) {
-      console.error(
-        "Failed to refetch missing thumbnail for message:",
-        file.messageId,
-        e,
-      );
-    }
-
-    setThumbUrl(undefined);
-    setIsFetchingThumbnail(false);
-  };
 
   return (
     <div
@@ -286,9 +211,7 @@ function FileGridItem({
             src={thumbUrl}
             alt={file.name}
             className={`w-full h-full ${galleryMode ? "object-cover" : "object-cover"}`}
-            onError={() => {
-              void refetchThumbnail();
-            }}
+            onError={dismissThumbnail}
           />
         ) : showThumbnailPlaceholder ? (
           <>

@@ -34,7 +34,8 @@ pub use engine::TransferEngine;
 pub use error::{Result, TelegramError};
 pub use pool::{ACTIVE_BOT_THRESHOLD, BotLease, BotPool};
 pub use types::{
-    CancellationToken, DownloadRange, DownloadSink, MediaType, SentMedia, TransferConfig,
+    CancellationToken, DownloadRange, DownloadSink, MediaType, SentMedia, ThumbnailQuality,
+    TransferConfig,
 };
 
 #[cfg(test)]

@@ -285,7 +285,19 @@ impl Resolved {
             Resolved::File(doc) => SavedItem {
                 chat_id: doc.chat_id,
                 message_id: doc.message_id,
-                thumbnail: None,
+                // Offer the cheap Telegram preview straight away: the webui
+                // paints it immediately and upgrades to the larger tier once
+                // that has been fetched and cached. Only offered when
+                // indexing actually saw a thumbnail, so a row without one
+                // never costs a round trip to Telegram to learn it is absent.
+                thumbnail: if doc.thumbnail_id.is_some() && doc.message_id > 0 {
+                    Some(format!(
+                        "/api/fs/thumbnail?message_id={}&quality=low",
+                        doc.message_id
+                    ))
+                } else {
+                    None
+                },
                 file_type: doc.media_type.clone(),
                 file_unique_id: doc.file_unique_id.clone(),
                 file_size: doc.file_size,
@@ -375,7 +387,7 @@ async fn path_taken(
 
 /// Insert the folder at `path` plus any missing ancestors
 /// (`/Home/A/B` creates `/Home/A` then `/Home/A/B`).
-async fn insert_folder_with_ancestors(
+pub(crate) async fn insert_folder_with_ancestors(
     client: &mongodb::Client,
     owner_id: &str,
     path: &str,
@@ -404,6 +416,29 @@ async fn insert_folder_with_ancestors(
             .upsert(true)
             .await
             .map_err(mongo_err)?;
+    }
+    Ok(())
+}
+
+/// Destinations `folder_for_media` writes indexed items into. Indexing
+/// upserts `FileDoc`s straight into these paths without ever creating their
+/// `FolderDoc` rows, so unless they are seeded the explorer never lists
+/// `/Home/Images` & co. and every indexed item stays unreachable.
+const MEDIA_FOLDERS: &[&str] = &[
+    "/Home/Images",
+    "/Home/Videos",
+    "/Home/Audio",
+    "/Home/Documents",
+];
+
+/// Seed the default media folders for `owner_id`. Idempotent: the rows are
+/// written with `$setOnInsert`, so folders a user already made are untouched.
+pub(crate) async fn ensure_media_folders(
+    client: &mongodb::Client,
+    owner_id: &str,
+) -> Result<(), ApiError> {
+    for path in MEDIA_FOLDERS {
+        insert_folder_with_ancestors(client, owner_id, path).await?;
     }
     Ok(())
 }

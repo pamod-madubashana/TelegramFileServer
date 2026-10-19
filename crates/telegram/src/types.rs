@@ -39,6 +39,44 @@ impl MediaType {
     }
 }
 
+/// Which of a message's Telegram thumbnails to fetch.
+///
+/// Telegram attaches several sizes to a photo or to a video document. The
+/// explorer paints a whole listing at once, so it asks for [`Low`] the moment
+/// a row appears and upgrades to [`High`] in the background once the larger
+/// bytes have come back and been cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThumbnailQuality {
+    /// The cheapest preview Telegram will give up, usually one it already
+    /// attached to the message object (so it costs no extra download).
+    Low,
+    /// The largest preview Telegram is willing to serve without handing over
+    /// the full file.
+    High,
+}
+
+impl ThumbnailQuality {
+    /// Stable name used in cache file names and query strings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::High => "high",
+        }
+    }
+}
+
+impl std::str::FromStr for ThumbnailQuality {
+    type Err = ();
+
+    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "low" | "small" | "preview" => Ok(Self::Low),
+            "high" | "large" | "full" => Ok(Self::High),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Metadata returned after sending a file to Telegram
 #[derive(Debug, Clone)]
 pub struct SentMedia {

@@ -72,6 +72,16 @@ fn get_data_dir() -> PathBuf {
         .join("TelegramFileServer")
 }
 
+/// On-disk cache of Telegram message thumbnails.
+///
+/// A thumbnail never changes once its message exists, so nothing here ever
+/// expires: a miss is fetched from Telegram once and then served from disk
+/// for the life of the installation. Lives next to `data.tfs` because it is
+/// regenerable state, not configuration.
+pub fn get_thumbnail_dir() -> PathBuf {
+    get_data_dir().join("thumbnails")
+}
+
 /// Get the directory of the running binary — config.tfs lives here so the
 /// whole config travels with the binary. TFS_BIN_DIR overrides
 /// (used by tests).

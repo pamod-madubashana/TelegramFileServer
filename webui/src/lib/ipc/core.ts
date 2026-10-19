@@ -115,6 +115,19 @@ function mediaUrl(messageId: number, inline: boolean): string {
   return token ? `${base}&token=${encodeURIComponent(token)}` : base;
 }
 
+/**
+ * Thumbnail URL for one message, in the requested quality tier.
+ *
+ * `low` is the cheap preview the server bundles with a listing; `high` is the
+ * largest it will serve. The server caches both on disk, so the same URL is
+ * safe to hand out again on every reload.
+ */
+function thumbnailUrl(messageId: number, quality: "low" | "high"): string {
+  const base = `/api/fs/thumbnail?message_id=${messageId}&quality=${quality}`;
+  const token = authToken();
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}
+
 /** Client-originated events ride the same `listen()` bus as SSE, via CustomEvent. */
 function emitLocalEvent(event: string, payload: unknown): void {
   window.dispatchEvent(new CustomEvent(event, { detail: payload }));
@@ -450,9 +463,31 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     }
 
     case "tg_get_message_thumbnail": {
-      // Telegram thumbnail bytes need a message-context client method the
-      // server does not expose; callers fall back to inline previews.
-      return null as T;
+      // Hand back the larger tier's URL; the server caches the bytes on disk
+      // and the caller swaps it in once the image has actually decoded.
+      const messageId = Number(args?.messageId ?? 0);
+      return Number.isFinite(messageId) && messageId > 0
+        ? (thumbnailUrl(messageId, "high") as T)
+        : (null as T);
+    }
+
+    case "tg_prefetch_message_thumbnails": {
+      // One answer for the whole listing: every message gets its cheap
+      // preview URL up front, so a cold grid paints without a round trip
+      // per tile. The server caches the bytes on disk, so the same URLs are
+      // just as valid on the tenth visit as on the first.
+      const requested = Array.isArray(args?.messageIds)
+        ? (args.messageIds as unknown[]).map(Number)
+        : [];
+      const messageIds = requested.filter(
+        (id) => Number.isFinite(id) && id > 0,
+      );
+      return {
+        thumbnails: messageIds.map((message_id) => ({
+          message_id,
+          thumbnail: thumbnailUrl(message_id, "low"),
+        })),
+      } as T;
     }
 
     case "tg_prepare_saved_media_stream":

@@ -27,6 +27,10 @@ export type UploadQueueStatus =
   | "failed"
   | "cancelled";
 
+/** States a task cannot leave; anything still in progress may advance to them. */
+const isFinishedUploadState = (state: UploadTaskState): boolean =>
+  state === "COMPLETED" || state === "CANCELLED";
+
 export type UploadQueueItemView = {
   id: string;
   uploadId: string;
@@ -651,8 +655,16 @@ export class UploadManager {
       if (result && typeof result.message_id === "number") {
         task.messageId = result.message_id;
       }
-      // Rely on tg-upload-progress/tg-upload-indexed for transitions.
-      task.state = "SENDING";
+      // Rely on tg-upload-progress/tg-upload-indexed for transitions. Those
+      // events are dispatched from xhr.onload, which settles before this
+      // await resumes - so the task can already be COMPLETED by now. Forcing
+      // SENDING over it demotes a finished task back to an in-progress one,
+      // which strands it (no further events will ever arrive) and leaves the
+      // explorer drawing an upload placeholder beside the file that already
+      // landed in the listing.
+      if (!isFinishedUploadState(task.state)) {
+        task.state = "SENDING";
+      }
       this.recomputeProgress();
       this.emit();
 

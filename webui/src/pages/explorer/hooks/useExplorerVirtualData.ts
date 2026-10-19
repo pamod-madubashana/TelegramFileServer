@@ -895,16 +895,16 @@ export function useExplorerVirtualData({
           ? snapshot.indexed_count
           : 0;
 
-      // Prefer the indexed-count estimate over the backend's ID-span percent.
-      // The backend computes progress as walked/latest_message_id, but
-      // Telegram message IDs have large gaps so that number doesn't reflect
-      // actual work done. The indexed-count estimate is monotonic and
-      // proportional to items actually processed.
-      const estimated =
-        indexedCount > 0
+      // The backend's id-span percent is the real-time signal: it is now
+      // published per item as the walk advances and never exceeds 99 until
+      // the closing UpToDate snapshot. The indexed-count curve is only a
+      // fallback for snapshots that carry no percent — on a small chat it
+      // pins the bar to 1% no matter how much work is left.
+      const realProgress = hasExplicitPercent
+        ? progress
+        : indexedCount > 0
           ? estimateSyncPercentFromIndexedCount(indexedCount)
           : 0;
-      const realProgress = Math.max(estimated, hasExplicitPercent ? progress : 0);
 
       if (realProgress > 0 || hasExplicitPercent) {
         lastBackendSyncProgressRef.current = Math.max(
@@ -929,9 +929,9 @@ export function useExplorerVirtualData({
       const wasUpToDate = hasReachedSavedUpToDateRef.current;
       if (state === "Syncing") {
         setIsSavedBackfillSyncing(true);
-        if (!wasUpToDate) {
-          setIsSavedSyncComplete(false);
-        }
+        // A new run invalidates any earlier "up to date" claim: keeping the
+        // flag would show 100% while the walk is still running.
+        setIsSavedSyncComplete(false);
       } else if (state === "UpToDate") {
         hasReachedSavedUpToDateRef.current = true;
         setIsSavedBackfillSyncing(false);

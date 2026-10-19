@@ -8,8 +8,7 @@ import {
   getEffectiveFolderType,
   getFolderTypeLabel,
 } from "@/lib/folder-settings";
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useProgressiveThumbnail } from "@/lib/use-progressive-thumbnail";
 
 interface DetailsPanelProps {
   file: FileItem | null;
@@ -34,75 +33,12 @@ export function DetailsPanel({
   onOpenLocation,
   isFavorite = false,
 }: DetailsPanelProps) {
-  const [previewThumb, setPreviewThumb] = useState<string | undefined>(
+  // Paint the cheap preview the listing already advertises, then upgrade to
+  // the larger tier once the server has it cached and the browser decodes it.
+  const { thumbUrl: previewThumb, dismissThumbnail } = useProgressiveThumbnail(
     resolveThumbnailSrc(file?.thumbnail),
+    file?.isDirectory || file?.isNoteMessage ? undefined : file?.messageId,
   );
-  const [hasRetriedBrokenThumbnail, setHasRetriedBrokenThumbnail] =
-    useState(false);
-
-  useEffect(() => {
-    setPreviewThumb(resolveThumbnailSrc(file?.thumbnail));
-    setHasRetriedBrokenThumbnail(false);
-  }, [file?.messageId, file?.thumbnail]);
-
-  useEffect(() => {
-    const messageId = file?.messageId;
-    if (!messageId || previewThumb || hasRetriedBrokenThumbnail) {
-      return;
-    }
-
-    setHasRetriedBrokenThumbnail(true);
-
-    const fetchThumbnail = async () => {
-      try {
-        const result: string | null = await invoke("tg_get_message_thumbnail", {
-          messageId,
-        });
-        const resolved = resolveThumbnailSrc(result);
-        if (resolved) {
-          setPreviewThumb(resolved);
-        }
-      } catch (e) {
-        console.error("Failed to fetch thumbnail for message:", messageId, e);
-      }
-    };
-
-    void fetchThumbnail();
-  }, [file?.messageId, hasRetriedBrokenThumbnail, previewThumb]);
-
-  const refetchThumbnail = async () => {
-    const messageId = file?.messageId;
-    if (!messageId) {
-      setPreviewThumb(undefined);
-      return;
-    }
-
-    if (hasRetriedBrokenThumbnail) {
-      setPreviewThumb(undefined);
-      return;
-    }
-
-    setHasRetriedBrokenThumbnail(true);
-
-    try {
-      const result: string | null = await invoke("tg_get_message_thumbnail", {
-        messageId,
-      });
-      const resolved = resolveThumbnailSrc(result);
-      if (resolved) {
-        setPreviewThumb(resolved);
-        return;
-      }
-    } catch (e) {
-      console.error(
-        "Failed to refetch missing thumbnail for message:",
-        messageId,
-        e,
-      );
-    }
-
-    setPreviewThumb(undefined);
-  };
 
   if (!file) {
     return (
@@ -142,9 +78,7 @@ export function DetailsPanel({
               src={previewThumb}
               alt={file.name}
               className="h-full w-full object-cover animate-in fade-in zoom-in-95 duration-300"
-              onError={() => {
-                void refetchThumbnail();
-              }}
+              onError={dismissThumbnail}
             />
           ) : file.isDirectory ? (
             <FolderArtwork

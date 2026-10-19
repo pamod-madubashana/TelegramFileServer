@@ -48,6 +48,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 mod files;
+mod thumbnails;
 mod ui;
 mod vfs;
 
@@ -1774,6 +1775,9 @@ pub struct AppState {
     indexer: Arc<tokio::sync::Mutex<IndexerState>>,
     /// Per-user Telegram profile-photo cache (tg user id → bytes + timestamp).
     photo_cache: Arc<Mutex<HashMap<i64, CachedPhoto>>>,
+    /// Server-side cache of Telegram message thumbnails, shared for the life
+    /// of the process.
+    thumbnails: &'static thumbnails::ThumbnailCache,
 }
 
 /// Snapshot of the history indexer's progress, published via SSE and
@@ -1800,7 +1804,13 @@ impl AppState {
             events: tokio::sync::broadcast::channel(64).0,
             indexer: Arc::new(tokio::sync::Mutex::new(IndexerState::default())),
             photo_cache: Arc::new(Mutex::new(HashMap::new())),
+            thumbnails: thumbnails::ThumbnailCache::global(),
         }
+    }
+
+    /// The process-wide thumbnail cache.
+    pub(crate) fn thumbnails(&self) -> &thumbnails::ThumbnailCache {
+        self.thumbnails
     }
 
     /// Publish one event to every `/api/events` SSE subscriber. A closed or
@@ -2698,17 +2708,27 @@ async fn files_upload(
         .map_err(|e| ApiError::Telegram(format!("upload failed: {e}")))?;
     drop(lease);
 
-    // Uploads are sent as documents (exact bytes, no Telegram re-encode), so
-    // the message comes back typed as `Document`. Restore the extension-based
-    // classification so images/videos/audio keep their folder + gallery
-    // routing even though the transport is a document.
+    // Telegram types the message by what it actually received - a `Photo`
+    // for an image it accepted, a `Document` for everything else - while the
+    // explorer must route by the file the user chose. Restore the
+    // extension-based classification so folder + gallery routing does not
+    // depend on which transport Telegram happened to use.
     sent.media_type = media_type;
+
+    // A photo upload is re-encoded by Telegram, so the bytes it now holds are
+    // not the staged ones; record the size it reports or the listing would
+    // promise bytes the download does not deliver.
+    let reported_size = if sent.file_size > 0 {
+        sent.file_size
+    } else {
+        staged.size
+    };
 
     let doc = files::FileDoc::new(
         &user.id,
         &folder,
         &staged.file_name,
-        staged.size,
+        reported_size,
         &sent,
         bot_index,
     );
@@ -2821,6 +2841,86 @@ async fn media_by_message(
         .await?
         .ok_or_else(|| ApiError::NotFound("file not found".to_string()))?;
     serve_media_doc(&state, doc, query.inline.unwrap_or(true), method, &headers).await
+}
+
+/// GET /api/fs/thumbnail -? one message's preview image, served out of the
+/// server-side thumbnail cache and fetched from Telegram on a miss.
+///
+/// Two tiers exist so a listing paints instantly: `low` is the cheap preview
+/// the grid shows the moment a row appears, `high` is the largest Telegram
+/// will serve. The webui asks for `low` first and swaps in `high` once the
+/// larger bytes have arrived, which is why both are cached independently.
+async fn thumbnail_by_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ThumbnailQuery>,
+) -> ApiResult<Response> {
+    let owner = files::require_media_session(&headers, query.token.as_deref(), &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &owner)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.permissions.read {
+        return Err(ApiError::Forbidden(
+            "this account cannot view files".to_string(),
+        ));
+    }
+
+    let quality = match query.quality.as_deref().unwrap_or("low").parse() {
+        Ok(quality) => quality,
+        Err(()) => {
+            return Err(ApiError::InvalidInput(
+                "quality must be \"low\" or \"high\"".to_string(),
+            ));
+        }
+    };
+
+    let doc = files::find_file_by_message(&client, &user.id, query.message_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("file not found".to_string()))?;
+
+    // Pin the bot that stored the file, exactly as the media route does: the
+    // others may not be able to see that chat at all.
+    let pool = state.transfer_pool().await?;
+    let slot = usize::try_from(doc.bot_index).map_err(|_| {
+        ApiError::Telegram(format!(
+            "file was stored by an unknown bot (slot {})",
+            doc.bot_index
+        ))
+    })?;
+    let lease = pool
+        .lease_slot(slot)
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+
+    let telegram = lease.client();
+    let Some(bytes) = state
+        .thumbnails()
+        .get_or_fetch(telegram.as_ref(), doc.chat_id, doc.message_id, quality)
+        .await
+    else {
+        return Err(ApiError::NotFound(
+            "no thumbnail is available for this file".to_string(),
+        ));
+    };
+
+    Ok(Response::builder()
+        .header(CONTENT_TYPE, "image/jpeg")
+        // Telegram never re-encodes a thumbnail, so the bytes behind a given
+        // message id and tier are fixed for good.
+        .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(CONTENT_LENGTH, bytes.len())
+        .body(Body::from(bytes))
+        .map_err(|e| ApiError::Internal(format!("response build failed: {e}")))?)
+}
+
+#[derive(Debug, Deserialize)]
+struct ThumbnailQuery {
+    message_id: i32,
+    /// Defaults to `low`: the grid asks for the cheap tier first.
+    quality: Option<String>,
+    /// Session token for the `<img src>` element, which cannot set headers.
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3150,6 +3250,25 @@ fn folder_for_media(media_type: MediaType) -> &'static str {
     }
 }
 
+/// One `account_sync_changed` snapshot for a walk still in flight: `covered`
+/// is how many message ids are done (ids above the current page plus this
+/// page's share of the ids its items cover). Walking the id span keeps the
+/// bar moving even when a page yields no media, and capping at 99 keeps 100%
+/// reserved for the closing `UpToDate` snapshot — the bar must never claim
+/// completion while indexing is still running.
+fn publish_index_progress(state: &Arc<AppState>, latest_id: i64, covered: u64, indexed: u64) {
+    let total_span = latest_id.max(1) as u64;
+    let progress_percent = ((covered.min(total_span) * 100) / total_span).min(99);
+    state.publish_event(
+        "account_sync_changed",
+        serde_json::json!({
+            "state": "Syncing",
+            "indexed_count": indexed,
+            "progress_percent": progress_percent,
+        }),
+    );
+}
+
 /// Core indexing loop: page history newest→oldest, upsert FileDocs, publish
 /// progress. Returns the number of newly-inserted documents. `latest_id` is
 /// the pre-probed newest message id (must be > 0; callers abort earlier when
@@ -3165,6 +3284,11 @@ async fn run_history_index(
     let files_coll = mongo
         .database(&data_database_name())
         .collection::<files::FileDoc>(files::FileDoc::COLLECTION_NAME);
+
+    // The FileDocs written below land in /Home/Images & co., but only a
+    // FolderDoc row makes those paths show up under /Home. Seed them before
+    // the first page so indexed items are browsable as soon as they arrive.
+    vfs::ensure_media_folders(mongo, owner_id).await?;
 
     // Bots cannot call messages.getHistory (BOT_METHOD_INVALID), so we
     // walk downward from the pre-probed newest id in fixed batches with
@@ -3190,15 +3314,38 @@ async fn run_history_index(
             .map_err(|e| ApiError::Telegram(format!("history listing failed: {e}")))?;
         drop(lease);
 
+        // Ids this page covers: `offset_id` is an exclusive upper bound, so
+        // the page is [offset_id - PAGE, offset_id) clipped to real ids. The
+        // final page is short and must not be counted as a full page, or the
+        // bar would hit 100% a page early.
+        let page_ids = PAGE.min(offset_id).max(0) as u64;
+        let covered_before = latest_id.saturating_sub(i64::from(offset_id)).max(0) as u64;
+        let page_total = page.len() as u64;
+        let mut last_progress_publish: Option<std::time::Instant> = None;
+
         // Process the page (may be empty when no media exists in this id
         // range — we still walk downward so no gaps are left).
         let mut page_new: u64 = 0;
-        for (sent, caption) in &page {
+        for (i, (sent, caption)) in page.iter().enumerate() {
             scanned += 1;
             let folder = folder_for_media(sent.media_type);
             let mut doc =
                 files::FileDoc::new(owner_id, folder, &sent.file_name, sent.file_size, sent, 0);
             doc.caption = caption.clone();
+            // A file row's `_id` embeds the name, and the name this code
+            // produces for a message can change between builds (photos used
+            // to collapse onto "photo.jpg", nameless videos onto "unknown").
+            // Drop any row still keyed to this message under an older name,
+            // or re-indexing strands a stale duplicate beside the new one.
+            let _ = files_coll
+                .delete_many(doc! {
+                    "owner_id": owner_id,
+                    "file_path": folder,
+                    "chat_id": sent.chat_id,
+                    "message_id": sent.message_id,
+                    "_id": { "$ne": &doc.id },
+                })
+                .await;
             // Overwrite any previous record for this (owner, folder, name)
             // so re-indexing refreshes message ids instead of failing on
             // a duplicate key.
@@ -3222,26 +3369,42 @@ async fn run_history_index(
                     "folder_kind": folder_kind,
                 }),
             );
+
+            // Real-time percent while the page is being written: ids walked
+            // before this page plus this page's share as each item lands.
+            // Without it a chat that fits in one page emits a single 0%
+            // snapshot and then jumps straight to 100% at the end. Throttled
+            // so a large backfill cannot flood the SSE broadcast.
+            if page_total > 0 {
+                let now = std::time::Instant::now();
+                let last_item = i + 1 == page.len();
+                let due = match last_progress_publish {
+                    None => true,
+                    Some(at) => now.duration_since(at).as_millis() >= 100,
+                };
+                if last_item || due {
+                    last_progress_publish = Some(now);
+                    let covered =
+                        covered_before + page_ids.saturating_mul(i as u64 + 1) / page_total;
+                    publish_index_progress(state, latest_id, covered, total_new + page_new);
+                }
+            }
         }
 
         total_new += page_new;
 
-        // Progress snapshot after every page.
+        // Progress snapshot after every page (also the only one when the page
+        // carried no media, so an empty stretch of chat still advances).
         {
             let mut guard = state.indexer.lock().await;
             guard.scanned = scanned;
             guard.indexed = total_new;
         }
-        let walked = latest_id.saturating_sub(i64::from(offset_id)).max(0) as u64;
-        let total_span = latest_id.max(1) as u64;
-        let progress_percent = ((walked * 100) / total_span).min(100);
-        state.publish_event(
-            "account_sync_changed",
-            serde_json::json!({
-                "state": "Syncing",
-                "indexed_count": total_new,
-                "progress_percent": progress_percent,
-            }),
+        publish_index_progress(
+            state,
+            latest_id,
+            covered_before + page_ids,
+            total_new,
         );
 
         // Walk downward by one page: the next batch is [offset-PAGE, offset).
@@ -3433,6 +3596,7 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/fs/delete", post(vfs::delete_items))
         .route("/api/fs/gallery", get(vfs::gallery))
         .route("/api/fs/media", get(media_by_message))
+    .route("/api/fs/thumbnail", get(thumbnail_by_message))
         .route("/api/fs/index", post(fs_index))
         // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
         // (which serves index.html 200 and breaks response.json()).
