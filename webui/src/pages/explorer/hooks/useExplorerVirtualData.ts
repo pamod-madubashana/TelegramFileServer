@@ -138,8 +138,8 @@ export function useExplorerVirtualData({
   const savedUpToDateHideTimerRef = useRef<number | null>(null);
   const hasShownSavedUpToDateIndicatorRef = useRef(false);
   const lastSavedSyncProgressAtRef = useRef(0);
-  const lastSavedSyncIndexedCountRef = useRef(0);
   const lastSavedIndexedCountRef = useRef<number>(0);
+  const lastBackendSyncProgressRef = useRef(0);
   const lastTelegramSyncReloadAtRef = useRef<number>(0);
   const lastChatDriveAutoRefreshAtRef = useRef<number>(0);
   const hasReachedSavedUpToDateRef = useRef<boolean>(false);
@@ -830,7 +830,7 @@ export function useExplorerVirtualData({
       setIsSavedBackfillSyncing(true);
       setSavedSyncProgress(0);
       lastSavedSyncProgressAtRef.current = Date.now();
-      lastSavedSyncIndexedCountRef.current = 0;
+      lastBackendSyncProgressRef.current = 0;
       try {
         const syncResult = await indexSavedMessages();
         const complete = Boolean(syncResult?.historical_sync_complete);
@@ -874,6 +874,7 @@ export function useExplorerVirtualData({
     let unlisten: (() => void) | null = null;
 
     const handleSnapshot = async (snapshot: SyncSnapshotDto) => {
+      setIsConnecting(false);
       setShowStartupSavedSync((prev) => (prev ? false : prev));
 
       const state = snapshot.state;
@@ -888,13 +889,33 @@ export function useExplorerVirtualData({
       const progress = snapshot.progress_percent;
       const hasExplicitPercent =
         typeof progress === "number" && Number.isFinite(progress);
-      if (hasExplicitPercent) {
-        // Backfill progress only moves forward. Early pages legitimately
-        // compute 0% against a large chat; applying that literally would snap
-        // the bar back to zero and, by stamping the timestamp, stall the
-        // indeterminate creep above.
+      const indexedCount =
+        typeof snapshot.indexed_count === "number" &&
+        snapshot.indexed_count >= 0
+          ? snapshot.indexed_count
+          : 0;
+
+      // Prefer the indexed-count estimate over the backend's ID-span percent.
+      // The backend computes progress as walked/latest_message_id, but
+      // Telegram message IDs have large gaps so that number doesn't reflect
+      // actual work done. The indexed-count estimate is monotonic and
+      // proportional to items actually processed.
+      const estimated =
+        indexedCount > 0
+          ? estimateSyncPercentFromIndexedCount(indexedCount)
+          : 0;
+      const realProgress = Math.max(estimated, hasExplicitPercent ? progress : 0);
+
+      if (realProgress > 0 || hasExplicitPercent) {
+        lastBackendSyncProgressRef.current = Math.max(
+          lastBackendSyncProgressRef.current,
+          realProgress,
+        );
         setSavedSyncProgress((prev) => {
-          const next = Math.max(prev, progress);
+          const next =
+            lastBackendSyncProgressRef.current > 0
+              ? lastBackendSyncProgressRef.current
+              : Math.max(prev, lastBackendSyncProgressRef.current);
           if (next !== prev) {
             lastSavedSyncProgressAtRef.current = Date.now();
           }
@@ -938,25 +959,8 @@ export function useExplorerVirtualData({
         }
       }
 
-      const indexedCount =
-        typeof snapshot.indexed_count === "number" &&
-        snapshot.indexed_count >= 0
-          ? snapshot.indexed_count
-          : 0;
       const previousIndexed = lastSavedIndexedCountRef.current;
       lastSavedIndexedCountRef.current = indexedCount;
-
-      if (!hasExplicitPercent && state === "Syncing") {
-        const lastSeen = lastSavedSyncIndexedCountRef.current;
-        if (indexedCount > lastSeen) {
-          lastSavedSyncIndexedCountRef.current = indexedCount;
-          const estimated = estimateSyncPercentFromIndexedCount(indexedCount);
-          if (estimated > 0) {
-            setSavedSyncProgress((prev) => Math.max(prev, estimated));
-            lastSavedSyncProgressAtRef.current = Date.now();
-          }
-        }
-      }
 
       const activePath = currentPathRef.current;
       if (!activePath.startsWith("tg://saved")) {
@@ -1438,12 +1442,19 @@ export function useExplorerVirtualData({
       }
 
       setSavedSyncProgress((prev) => {
-        if (prev >= 90) {
+        // Never creep past what the backend has actually reported. The creep
+        // exists to fill the gap before the first real progress_percent lands;
+        // once the backend has spoken, its number is the ceiling.
+        const ceiling =
+          lastBackendSyncProgressRef.current > 0
+            ? lastBackendSyncProgressRef.current
+            : 90;
+        if (prev >= ceiling) {
           return prev;
         }
 
         const bump = prev < 10 ? 2 : 1;
-        const next = Math.min(90, prev + bump);
+        const next = Math.min(ceiling, prev + bump);
         if (next !== prev) {
           lastSavedSyncProgressAtRef.current = now;
         }

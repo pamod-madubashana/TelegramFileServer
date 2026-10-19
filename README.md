@@ -27,7 +27,7 @@
 
 <p align="center">
   <b>v2 rewrite progress</b><br>
-  <img src="https://geps.dev/progress/30" alt="v2 progress 30%">
+  <img src="https://geps.dev/progress/50" alt="v2 progress 50%">
 </p>
 
 ---
