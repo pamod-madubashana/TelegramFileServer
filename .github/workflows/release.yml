@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (e.g. 2.0.0 or v2.0.0); defaults to crates/server/Cargo.toml
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate release version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/server/Cargo.toml | head -n1)"
+          version="${RELEASE_VERSION:-$manifest_version}"
+          version="${version#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must use semver format (e.g. 2.0.0 or v2.0.0)"
+            exit 1
+          fi
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "::error::Release version $version must match crates/server/Cargo.toml ($manifest_version). Update the crate version before releasing."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version"
+
+  build:
+    needs: validate
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - name: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install web UI dependencies
+        working-directory: webui
+        run: npm ci
+
+      - name: Build web UI
+        working-directory: webui
+        run: |
+          npx tsc --noEmit
+          npm run build
+
+      - name: Build server
+        run: cargo build --locked --release --package tfs --target ${{ matrix.target }}
+
+      - name: Package release (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "release\tfs-v$env:VERSION-$env:PLATFORM"
+          New-Item -ItemType Directory -Force -Path "$stage\static" | Out-Null
+          Copy-Item "target\$env:TARGET\release\tfs.exe" "$stage\tfs.exe"
+          Copy-Item "crates\server\static\*" "$stage\static" -Recurse -Force
+          Compress-Archive -Path $stage -DestinationPath "release\tfs-v$env:VERSION-$env:PLATFORM.zip"
+
+      - name: Package release (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          stage="release/tfs-v${VERSION}-${PLATFORM}"
+          mkdir -p "$stage/static"
+          cp "target/${TARGET}/release/tfs" "$stage/tfs"
+          cp -R crates/server/static/. "$stage/static/"
+          tar -czf "${stage}.tar.gz" -C release "$(basename "$stage")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: release/tfs-v${{ needs.validate.outputs.version }}-${{ matrix.name }}.*
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.validate.outputs.version }}
+          name: Release v${{ needs.validate.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: release-assets/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

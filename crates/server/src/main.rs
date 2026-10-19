@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use mongodb::bson::Document;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -59,19 +59,19 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracing(headless)?;
 
-    let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static");
-    let webui_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/static/webui");
+    let static_dir = bundled_static_dir()?;
+    let webui_dir = static_dir.join("webui");
 
     // The whole UI — setup wizard included — is the SPA at the origin root:
     // /setup, /login, /explorer, /settings/… Lookup order for everything the
     // API did not claim: static files (icon.png) → webui files (assets) →
     // the SPA index itself (history routing for unknown paths).
-    let serve_dir = ServeDir::new(static_dir)
+    let serve_dir = ServeDir::new(&static_dir)
         .append_index_html_on_directories(true)
         .fallback(
-            ServeDir::new(webui_dir)
+            ServeDir::new(&webui_dir)
                 .append_index_html_on_directories(true)
-                .fallback(ServeFile::new(format!("{}/index.html", webui_dir))),
+                .fallback(ServeFile::new(webui_dir.join("index.html"))),
         );
 
     // tfs_api::router already registers absolute paths (/api/setup/*),
@@ -108,6 +108,18 @@ async fn main() -> anyhow::Result<()> {
     serve_result?;
 
     Ok(())
+}
+
+fn bundled_static_dir() -> anyhow::Result<PathBuf> {
+    let executable = std::env::current_exe()?;
+    if let Some(dir) = executable.parent() {
+        let bundled = dir.join("static");
+        if bundled.is_dir() {
+            return Ok(bundled);
+        }
+    }
+
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"))
 }
 
 fn configured_port() -> u16 {

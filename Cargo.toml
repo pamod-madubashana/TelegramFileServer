@@ -9,7 +9,6 @@ members = [
     "crates/app-core",
     "crates/jobs",
     "crates/server",
-    "apps/fileServerApp",
 ]
 
 [workspace.dependencies]

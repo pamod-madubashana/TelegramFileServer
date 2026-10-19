@@ -183,10 +183,12 @@ crate versions.
 
 ## Downloads
 
-Nothing is published to a package registry yet — install from a clone.
+- **Server binaries (Windows, Linux, macOS)** — [GitHub Releases](https://github.com/The-KLYRO/TelegramFileServer/releases)
+- **Build from source** — `cargo build --workspace --release`
+- **Desktop app** — [FileServerApp releases](https://github.com/pamod-madubashana/FileServerApp/releases)
 
-- **v2** — `cargo build --workspace --release`
-- **Desktop builds (Windows/Linux/macOS)** — [FileServerApp releases](https://github.com/pamod-madubashana/FileServerApp/releases)
+Server release archives include the `tfs` executable and its `static` web assets. Keep the
+`static` directory beside the executable when extracting the archive.
 
 The web UI and desktop app are maintained separately in
 [FileServerApp](https://github.com/pamod-madubashana/FileServerApp).
