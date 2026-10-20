@@ -19,3 +19,4 @@ tg_files/
 crates/telegram/poc-sessions/
 .opencode
 *.ps1
+graphify-out/
