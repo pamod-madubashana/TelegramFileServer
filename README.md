@@ -9,6 +9,8 @@
 </p>
 
 <p align="center">
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white" alt="Rust stable"></a>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/React-18.3.1-61DAFB?logo=react&logoColor=black" alt="React 18.3.1"></a>
   <a href="https://github.com/The-KLYRO/TelegramFileServer"><img src="https://img.shields.io/badge/version-2.0.0-blue" alt="Version"></a>
   <a href="https://telegram.org"><img src="https://img.shields.io/badge/Storage-Telegram-269D8F?logo=telegram&logoColor=white" alt="Storage via Telegram"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-46A75A" alt="MIT License"></a>
