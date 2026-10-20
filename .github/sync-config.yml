@@ -1,5 +1,7 @@
 github:
   enabled: true
+  owner: pamod-madubashana
+  repo: TelegramFileServer
   sync:
     branches:
       enabled: true
