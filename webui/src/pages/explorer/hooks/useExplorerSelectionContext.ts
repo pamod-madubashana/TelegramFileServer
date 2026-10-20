@@ -40,6 +40,12 @@ type UseExplorerSelectionContextArgs = {
   viewMode: ExplorerViewMode;
 };
 
+/** Queue entries may carry a folder prefix; listings show the base name. */
+const queueBaseName = (fileName: string): string => {
+  const segments = fileName.replace(/\\/g, "/").split("/").filter(Boolean);
+  return segments[segments.length - 1] ?? fileName;
+};
+
 export function useExplorerSelectionContext({
   activePaste,
   clipboardItem,
@@ -78,27 +84,52 @@ export function useExplorerSelectionContext({
   const normalizedCurrentPath = normalizePath(currentPath);
   // A finished upload lands in the listing before (or while) its queue entry
   // leaves the in-progress states; drawing both puts a placeholder next to
-  // the file it is supposed to stand in for.
+  // the file it is supposed to stand in for. Queue entries for folder
+  // uploads carry a relative path prefix while listings show base names, so
+  // the lookup strips the prefix before comparing.
   const presentNames = useMemo(
     () => new Set(sortedFiles.map((file) => file.name)),
     [sortedFiles],
   );
-  const uploadsForCurrentPath = uploadQueueItems.filter((item) => {
+  const matchedUploads = uploadQueueItems.filter((item) => {
     const destinationPath = item.destinationVirtualPath
       ? normalizePath(item.destinationVirtualPath)
       : null;
     return (
       destinationPath === normalizedCurrentPath &&
       (item.status === "queued" || isUploadQueueItemInProgress(item.status)) &&
-      !presentNames.has(item.fileName)
+      !presentNames.has(queueBaseName(item.fileName))
     );
   });
-  const uploadPlaceholderItem = uploadsForCurrentPath.find((item) =>
-    isUploadQueueItemInProgress(item.status),
-  ) ?? null;
+  // Picking the same file twice produces two queue entries for one file;
+  // collapse them so the pane draws a single row, preferring the entry that
+  // is actually in flight so the named placeholder tracks the live upload.
+  const uploadsByName = new Map<string, UploadQueueItemState>();
+  for (const item of matchedUploads) {
+    const key = queueBaseName(item.fileName);
+    const existing = uploadsByName.get(key);
+    if (
+      !existing ||
+      (!isUploadQueueItemInProgress(existing.status) &&
+        isUploadQueueItemInProgress(item.status))
+    ) {
+      uploadsByName.set(key, item);
+    }
+  }
+  const uploadsForCurrentPath = Array.from(uploadsByName.values());
+  const uploadPlaceholderItem =
+    uploadsForCurrentPath.find((item) =>
+      isUploadQueueItemInProgress(item.status),
+    ) ?? null;
+  const shouldShowUploadPlaceholder =
+    isUploadInProgress &&
+    !!uploadPlaceholderItem &&
+    normalizePath(uploadActivePlaceholderPath || "") === normalizedCurrentPath;
+  // Only subtract the named placeholder when it is actually rendered;
+  // otherwise its slot would vanish from the skeleton count.
   const uploadSkeletonCount = Math.max(
     0,
-    uploadsForCurrentPath.length - (uploadPlaceholderItem ? 1 : 0),
+    uploadsForCurrentPath.length - (shouldShowUploadPlaceholder ? 1 : 0),
   );
   const pasteSkeletonCount =
     activePaste &&
@@ -142,10 +173,6 @@ export function useExplorerSelectionContext({
     : isGalleryView
       ? "grid"
       : viewMode;
-  const shouldShowUploadPlaceholder =
-    isUploadInProgress &&
-    uploadPlaceholderItem &&
-    normalizePath(uploadActivePlaceholderPath || "") === normalizedCurrentPath;
 
   const closeContextMenu = useCallback(() => {
     setContextMenuState(null);

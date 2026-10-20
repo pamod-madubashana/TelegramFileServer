@@ -511,11 +511,21 @@ export function UploadConfirmWidget({
   const handleFilePicked = (event: ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files || []);
     if (!picked.length) return;
-    const nextEntries: UploadDraftEntry[] = picked.map((file) => ({
-      id: makeFileKey(file),
-      file,
-      relativePath: file.name,
-    }));
+    // Re-selecting an already staged file must not create a second entry:
+    // duplicate entries upload twice and draw two placeholder rows for one
+    // file.
+    const existingIds = new Set(draft.entries.map((entry) => entry.id));
+    const nextEntries: UploadDraftEntry[] = [];
+    for (const file of picked) {
+      const id = makeFileKey(file);
+      if (existingIds.has(id)) continue;
+      existingIds.add(id);
+      nextEntries.push({ id, file, relativePath: file.name });
+    }
+    if (!nextEntries.length) {
+      event.target.value = "";
+      return;
+    }
     const mergedEntries = [...draft.entries, ...nextEntries];
     const mergedFiles = mergedEntries.map((entry) => entry.file);
     const nextSendAs =

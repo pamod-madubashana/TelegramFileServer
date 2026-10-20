@@ -375,23 +375,33 @@ export class UploadManager {
     task.message = payload.message || undefined;
 
     const stage = payload.stage;
+    // A finished task must not be demoted by a late or duplicate progress
+    // event: re-opening an in-progress state strands the task (no further
+    // events arrive) and leaves the explorer drawing a placeholder beside
+    // the file that already landed in the listing.
+    const isFinishedState =
+      task.state === "COMPLETED" || task.state === "CANCELLED";
     if (stage === "preparing") {
-      task.state = task.state === "CANCELLED" ? task.state : "PREPARING";
+      if (!isFinishedState) task.state = "PREPARING";
     } else if (stage === "uploading") {
-      task.state = task.state === "CANCELLED" ? task.state : "UPLOADING";
+      if (!isFinishedState) task.state = "UPLOADING";
     } else if (stage === "sending") {
-      task.state = task.state === "CANCELLED" ? task.state : "SENDING";
+      if (!isFinishedState) task.state = "SENDING";
     } else if (stage === "completed") {
-      task.state = task.state === "CANCELLED" ? task.state : "INDEXING";
-      this.ensureIndexingTimeout(task.uploadId);
+      if (!isFinishedState) {
+        task.state = "INDEXING";
+        this.ensureIndexingTimeout(task.uploadId);
+      }
     } else if (stage === "cancelled") {
       task.state = "CANCELLED";
     } else {
       // failed
-      task.state =
-        this.classifyFailure(task.message || "Upload failed") === "retryable"
-          ? "FAILED_RETRYABLE"
-          : "FAILED_FATAL";
+      if (!isFinishedState) {
+        task.state =
+          this.classifyFailure(task.message || "Upload failed") === "retryable"
+            ? "FAILED_RETRYABLE"
+            : "FAILED_FATAL";
+      }
     }
 
     this.recomputeProgress();
@@ -475,12 +485,18 @@ export class UploadManager {
 
     await this.init();
 
-    this.targetVirtualPath = target;
-    this.placeholderVirtualPath = null;
-
     const rootDbPath = this.virtualToSavedPath(target);
 
-    const tasks: UploadTask[] = args.entries.map((entry) => {
+    // The same file staged twice must upload once: duplicate entries upload
+    // twice and make the explorer draw a placeholder row per entry for one
+    // file.
+    const seenEntryIds = new Set<string>();
+    const tasks: UploadTask[] = [];
+    for (const entry of args.entries) {
+      if (entry.id) {
+        if (seenEntryIds.has(entry.id)) continue;
+        seenEntryIds.add(entry.id);
+      }
       const rel = normalizeRelPath(entry.relativePath) || entry.file.name;
       const parts = rel.split("/").filter(Boolean);
       const dirs = parts.slice(0, -1);
@@ -488,7 +504,7 @@ export class UploadManager {
         ? joinSavedDbPath(rootDbPath, dirs.join("/"))
         : rootDbPath;
       const uploadId = createUploadId();
-      return {
+      tasks.push({
         uploadId,
         entry,
         fileName: entry.file.name,
@@ -500,8 +516,14 @@ export class UploadManager {
         state: "QUEUED",
         progressPercent: 0,
         cancelRequested: false,
-      };
-    });
+      });
+    }
+    if (!tasks.length) {
+      return { createdFolderStructure: false };
+    }
+
+    this.targetVirtualPath = target;
+    this.placeholderVirtualPath = null;
 
     // Pre-resolve and create folder tree BEFORE any uploads start.
     const createdFolderStructure = tasks.some((t) =>
