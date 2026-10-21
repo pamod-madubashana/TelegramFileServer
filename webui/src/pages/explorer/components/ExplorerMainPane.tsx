@@ -12,6 +12,7 @@ import {
   type UIEventHandler,
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ExplorerSidebar } from "@/components/skybox/ExplorerSidebar";
 import { SearchBar } from "@/components/skybox/SearchBar";
 import { Breadcrumbs } from "@/components/skybox/Breadcrumbs";
@@ -36,9 +37,11 @@ import {
   List,
   RefreshCw,
   RotateCcw,
+  Settings,
   SortAsc,
   Trash2,
 } from "lucide-react";
+import { type SettingsRouteState } from "@/pages/explorer/explorerSessionStore";
 import type {
   DownloadProgressPayload,
   ExplorerContextMenuState,
@@ -284,7 +287,18 @@ export function ExplorerMainPane({
   onSendNoteMessage,
   isSendingNoteMessage,
 }: ExplorerMainPaneProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [appVersion, setAppVersion] = useState("...");
+
+  const openSettings = () => {
+    navigate("/settings/explorer", {
+      state: {
+        fromExplorer: true,
+        returnTo: `${location.pathname}${location.search}${location.hash}`,
+      } satisfies SettingsRouteState,
+    });
+  };
   const selectedItems = sortedFiles.filter((file) =>
     selectedPathSet.has(file.path),
   );
@@ -384,6 +398,15 @@ export function ExplorerMainPane({
                 onChange={onSearchChange}
                 placeholder="Search files..."
               />
+              <button
+                type="button"
+                onClick={openSettings}
+                className="p-2 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                aria-label="Open settings"
+                title="Settings"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
             </div>
           </div>
 

@@ -50,8 +50,7 @@ export const getSettingsPageLabel = (pathname: string): string | null => {
     return null;
   }
 
-  const sectionLabel =
-    section === "window" ? "tray" : section.replace(/-/g, " ");
+  const sectionLabel = section.replace(/-/g, " ");
 
   return `settings: ${sectionLabel}`;
 };

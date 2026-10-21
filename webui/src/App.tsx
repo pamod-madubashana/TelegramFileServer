@@ -23,7 +23,6 @@ import {
 } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { TitleBar } from "@/components/shell/TitleBar";
 import LoadingPage from "./pages/LoadingPage";
 import ExplorerPage from "./pages/ExplorerPage";
 import { logger } from "./lib/logger.ts";
@@ -39,9 +38,6 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const SetupPage = lazy(() => import("./pages/SetupPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-const WindowTraySettingsPage = lazy(
-  () => import("./pages/settings/WindowTraySettingsPage"),
-);
 const ExplorerSettingsPage = lazy(
   () => import("./pages/settings/ExplorerSettingsPage"),
 );
@@ -88,7 +84,7 @@ const RouteSuspense = ({ children }: { children: ReactNode }) => {
 const SettingsIndexRedirect = () => {
   const location = useLocation();
 
-  return <Navigate to="window" replace state={location.state} />;
+  return <Navigate to="explorer" replace state={location.state} />;
 };
 
 type AuthStageDto =
@@ -309,14 +305,6 @@ const App = () => {
             ),
             children: [
               { index: true, element: <SettingsIndexRedirect /> },
-              {
-                path: "window",
-                element: (
-                  <RouteSuspense>
-                    <WindowTraySettingsPage />
-                  </RouteSuspense>
-                ),
-              },
               {
                 path: "explorer",
                 element: (
