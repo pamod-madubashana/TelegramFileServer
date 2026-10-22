@@ -1,6 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Cpu,
   MessageCircle,
   Monitor,
   Package,
@@ -34,7 +35,7 @@ type FeedbackErrorKind =
   | "permission_denied"
   | "slow_mode_or_rate_limit"
   | "network_error"
-  | "tdlib_error"
+  | "telegram_error"
   | "validation_error";
 
 type FeedbackDestinationStatus = {
@@ -90,10 +91,12 @@ type FeedbackAction =
   | { type: "edited" };
 
 const APP_NAME = "TelegramFileServer";
-const APP_DESCRIPTION = "A Tauri-based file server with Telegram integration";
+const APP_DESCRIPTION =
+  "A React and Rust file server with Telegram integration";
 const APP_VERSION_FALLBACK = "1.0.36";
-const TDLIB_VERSION_FALLBACK = "Not used";
-const TAURI_VERSION = "2.9.1";
+const GRAMMERS_VERSION_FALLBACK = "MTProto";
+const FRONTEND_RUNTIME = "v18";
+const BACKEND_RUNTIME = "2024";
 const FEEDBACK_MAX_LENGTH = 2000;
 const FEEDBACK_DIALOG_TRANSITION_MS = 180;
 
@@ -226,7 +229,6 @@ function feedbackStatusTitle(status: FeedbackState): string {
 
 export default function AboutSettingsPage() {
   const [appVersion, setAppVersion] = useState(APP_VERSION_FALLBACK);
-  const [tdlibVersion, setTdlibVersion] = useState(TDLIB_VERSION_FALLBACK);
   const [isFeedbackDialogMounted, setIsFeedbackDialogMounted] = useState(false);
   const [isFeedbackDialogVisible, setIsFeedbackDialogVisible] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
@@ -253,18 +255,6 @@ export default function AboutSettingsPage() {
         }
       });
 
-    void invoke<string>("tg_get_tdlib_version")
-      .then((version) => {
-        if (!cancelled) {
-          setTdlibVersion(version || TDLIB_VERSION_FALLBACK);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setTdlibVersion(TDLIB_VERSION_FALLBACK);
-        }
-      });
-
     dispatchFeedback({ type: "resolving" });
 
     void invoke<FeedbackDestinationStatus>("tg_feedback_resolve_destination")
@@ -288,7 +278,7 @@ export default function AboutSettingsPage() {
         dispatchFeedback({
           type: "failed",
           reason: mapCommandError(error),
-          errorKind: "tdlib_error",
+          errorKind: "telegram_error",
         });
       });
 
@@ -310,9 +300,9 @@ export default function AboutSettingsPage() {
 
   const aboutFacts: AboutFact[] = [
     {
-      id: "tdlib",
-      label: "TDLib",
-      value: tdlibVersion,
+      id: "grammers",
+      label: "Grammers",
+      value: GRAMMERS_VERSION_FALLBACK,
       icon: Package,
     },
     {
@@ -322,10 +312,16 @@ export default function AboutSettingsPage() {
       icon: Tag,
     },
     {
-      id: "runtime",
-      label: "Tauri",
-      value: TAURI_VERSION,
+      id: "react",
+      label: "React",
+      value: FRONTEND_RUNTIME,
       icon: Monitor,
+    },
+    {
+      id: "rust",
+      label: "Rust",
+      value: BACKEND_RUNTIME,
+      icon: Cpu,
     },
   ];
 
@@ -369,7 +365,7 @@ export default function AboutSettingsPage() {
       dispatchFeedback({
         type: "failed",
         reason: mapCommandError(error),
-        errorKind: "tdlib_error",
+        errorKind: "telegram_error",
       });
     }
   }
@@ -465,7 +461,7 @@ export default function AboutSettingsPage() {
               </p>
             </div>
 
-            <div className="grid w-full max-w-4xl gap-3 text-left sm:grid-cols-3 sm:gap-4">
+            <div className="grid w-full max-w-4xl gap-3 text-left sm:grid-cols-2 lg:grid-cols-4 sm:gap-4">
               {aboutFacts.map((fact) => {
                 const Icon = fact.icon;
 
