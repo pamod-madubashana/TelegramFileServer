@@ -3,9 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { showOsNotification } from "@/lib/os-notifications";
 
-const isTauri = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
 export const REQUIRED_CHANNEL_NOTIFICATION_EVENT_NAME =
   "required-channel-post-notification";
 
@@ -293,10 +290,6 @@ export function useRequiredChannelNotifications(
   }, [lastOpenedAtMs]);
 
   useEffect(() => {
-    if (!isTauri()) {
-      return;
-    }
-
     let cancelled = false;
     const seedCompletedRef = { current: false };
     Promise.all([
