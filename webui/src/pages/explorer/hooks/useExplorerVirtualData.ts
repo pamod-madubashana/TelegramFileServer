@@ -1110,6 +1110,28 @@ export function useExplorerVirtualData({
       }
 
       const activePath = currentPathRef.current;
+
+      // A drive upload: refetch that chat's live listing so the new message
+      // appears with its real drive paths (no Mongo row involved).
+      if (isDriveVirtualFolderPath(activePath)) {
+        const uploadedChatId = payload.filePath
+          ? parseDriveChatIdFromPath(payload.filePath)
+          : null;
+        const activeChatId = parseDriveChatIdFromPath(activePath);
+        if (
+          uploadedChatId &&
+          activeChatId &&
+          uploadedChatId === activeChatId
+        ) {
+          void loadChatDriveItemsPageRef.current(activePath, 0, false).catch(
+            () => {
+              // ignore
+            },
+          );
+        }
+        return;
+      }
+
       if (!isSavedVirtualFolderPath(activePath)) {
         return;
       }

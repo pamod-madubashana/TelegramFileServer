@@ -108,9 +108,39 @@ function messageIdFromPath(path: string): number {
   return Number(match[1]);
 }
 
-/** Streaming/preview URL for `/api/fs/media`, token in the query for `<video>`/`<img>`. */
-function mediaUrl(messageId: number, inline: boolean): string {
-  const base = `/api/fs/media?message_id=${messageId}&inline=${inline}`;
+/** `tg://drive-msg/<chat>/<msg>` → both ids, or null for any other path. */
+function parseDriveMsgPath(path: string): { chatId: number; messageId: number } | null {
+  const match = /^tg:\/\/drive-msg\/(-?\d+)\/(\d+)$/.exec(path.trim());
+  if (!match) {
+    return null;
+  }
+  const chatId = Number(match[1]);
+  const messageId = Number(match[2]);
+  if (!Number.isFinite(chatId) || chatId === 0 || !Number.isFinite(messageId) || messageId <= 0) {
+    return null;
+  }
+  return { chatId, messageId };
+}
+
+/** `tg://drive/<chat>` (a drive folder root) → chat id, or null. */
+function parseDriveChatPath(path: string): number | null {
+  const match = /^tg:\/\/drive\/(-?\d+)$/.exec(path.trim());
+  if (!match) {
+    return null;
+  }
+  const chatId = Number(match[1]);
+  return Number.isFinite(chatId) && chatId !== 0 ? chatId : null;
+}
+
+/**
+ * Streaming/preview URL for `/api/fs/media`, token in the query for
+ * `<video>`/`<img>`. With a `chatId`, the live drive endpoint (keyed on
+ * chat+message, no Mongo row needed) is used instead.
+ */
+function mediaUrl(messageId: number, inline: boolean, chatId?: number | null): string {
+  const base = chatId
+    ? `/api/fs/drive/media?chat_id=${chatId}&message_id=${messageId}&inline=${inline}`
+    : `/api/fs/media?message_id=${messageId}&inline=${inline}`;
   const token = authToken();
   return token ? `${base}&token=${encodeURIComponent(token)}` : base;
 }
@@ -120,12 +150,31 @@ function mediaUrl(messageId: number, inline: boolean): string {
  *
  * `low` is the cheap preview the server bundles with a listing; `high` is the
  * largest it will serve. The server caches both on disk, so the same URL is
- * safe to hand out again on every reload.
+ * safe to hand out again on every reload. With a `chatId`, previews come from
+ * the live drive endpoint instead of the Mongo-keyed one.
  */
-function thumbnailUrl(messageId: number, quality: "low" | "high"): string {
-  const base = `/api/fs/thumbnail?message_id=${messageId}&quality=${quality}`;
+function thumbnailUrl(
+  messageId: number,
+  quality: "low" | "high",
+  chatId?: number | null,
+): string {
+  const base = chatId
+    ? `/api/fs/drive/thumbnail?chat_id=${chatId}&message_id=${messageId}&quality=${quality}`
+    : `/api/fs/thumbnail?message_id=${messageId}&quality=${quality}`;
   const token = authToken();
   return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}
+
+/**
+ * Media URL for an item path: `tg://drive-msg/<chat>/<msg>` drives, and
+ * `tg://msg/<id>` the Mongo-keyed saved endpoint.
+ */
+function mediaUrlForPath(path: string, inline: boolean): string {
+  const drive = parseDriveMsgPath(path);
+  if (drive) {
+    return mediaUrl(drive.messageId, inline, drive.chatId);
+  }
+  return mediaUrl(messageIdFromPath(path), inline);
 }
 
 /** Client-originated events ride the same `listen()` bus as SSE, via CustomEvent. */
@@ -138,7 +187,12 @@ function uploadToSavedMessages(args: Record<string, unknown>): Promise<unknown> 
   const payload = (args?.args ?? args) as Record<string, unknown>;
   const uploadId = String(payload.uploadId ?? "");
   const fileName = String(payload.fileName ?? "upload.bin");
-  const destination = toSavedPath(String(payload.filePath ?? SAVED_ROOT));
+  const rawPath = String(payload.filePath ?? SAVED_ROOT);
+  // A `tg://drive/<id>` destination targets that drive's chat; the VFS row
+  // still lands at the Saved root, but Telegram receives the file in the
+  // drive chat (validated server-side against the caller's drive list).
+  const driveChatId = parseDriveChatPath(rawPath);
+  const destination = driveChatId ? SAVED_ROOT : toSavedPath(rawPath);
   const bytes = payload.fileBytes;
 
   if (!Array.isArray(bytes)) {
@@ -150,6 +204,9 @@ function uploadToSavedMessages(args: Record<string, unknown>): Promise<unknown> 
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("path", destination);
+    if (driveChatId) {
+      form.append("chat_id", String(driveChatId));
+    }
     form.append("file", new Blob([new Uint8Array(bytes as number[])]), fileName);
 
     const token = authToken();
@@ -205,7 +262,9 @@ function uploadToSavedMessages(args: Record<string, unknown>): Promise<unknown> 
       emitLocalEvent("tg-upload-indexed", {
         uploadId,
         messageId: typeof summary?.message_id === "number" ? summary.message_id : 0,
-        filePath: destination,
+        // Drives keep their `tg://drive/<id>` path so the explorer refreshes
+        // that chat's listing; saved uploads report the VFS folder.
+        filePath: driveChatId ? rawPath : destination,
       });
       resolve(summary);
     };
@@ -462,13 +521,43 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       return undefined as T;
     }
 
-    case "tg_get_message_thumbnail": {
+    case "tg_get_message_thumbnail":
+    case "tg_get_chat_message_thumbnail": {
       // Hand back the larger tier's URL; the server caches the bytes on disk
       // and the caller swaps it in once the image has actually decoded.
-      const messageId = Number(args?.messageId ?? 0);
+      const nested = (args?.args ?? args) as Record<string, unknown>;
+      const messageId = Number(nested.messageId ?? 0);
+      const chatId = Number(nested.chatId ?? 0);
       return Number.isFinite(messageId) && messageId > 0
-        ? (thumbnailUrl(messageId, "high") as T)
+        ? (thumbnailUrl(
+            messageId,
+            "high",
+            Number.isFinite(chatId) && chatId !== 0 ? chatId : null,
+          ) as T)
         : (null as T);
+    }
+
+    case "tg_prefetch_chat_message_thumbnails": {
+      // Same one-answer-up-front contract as the saved-items prefetch, but
+      // each URL is keyed on the drive's chat so never-indexed chats work.
+      const nested = (args?.args ?? args) as Record<string, unknown>;
+      const items = Array.isArray(nested.items) ? (nested.items as unknown[]) : [];
+      const thumbnails = items
+        .map((raw) => {
+          const item = raw as { chatId?: unknown; messageId?: unknown };
+          const chatId = Number(item?.chatId ?? 0);
+          const messageId = Number(item?.messageId ?? 0);
+          if (!Number.isFinite(chatId) || chatId === 0 || !Number.isFinite(messageId) || messageId <= 0) {
+            return null;
+          }
+          return {
+            chat_id: chatId,
+            message_id: messageId,
+            thumbnail: thumbnailUrl(messageId, "low", chatId),
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return { thumbnails } as T;
     }
 
     case "tg_prefetch_message_thumbnails": {
@@ -492,14 +581,12 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 
     case "tg_prepare_saved_media_stream":
     case "tg_prepare_saved_media_preview": {
-      const messageId = messageIdFromPath(String(args?.sourcePath ?? ""));
-      return mediaUrl(messageId, true) as T;
+      return mediaUrlForPath(String(args?.sourcePath ?? ""), true) as T;
     }
 
     case "tg_download_saved_file": {
-      const messageId = messageIdFromPath(String(args?.sourcePath ?? ""));
       const anchor = document.createElement("a");
-      anchor.href = mediaUrl(messageId, false);
+      anchor.href = mediaUrlForPath(String(args?.sourcePath ?? ""), false);
       anchor.rel = "noopener";
       document.body.appendChild(anchor);
       anchor.click();
@@ -573,7 +660,23 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     }
 
     case "tg_list_chat_drive_items_page": {
-      throw new Error("Chat drive is not available in the web app");
+      // Live drive page: newest-first chat history from Telegram, so a chat
+      // needs no Mongo rows to be browsable.
+      const nested = (args?.args ?? args) as Record<string, unknown>;
+      const chatId = Number(nested.chatId ?? 0);
+      const offset = Number(nested.offset ?? 0);
+      const limit = Number(nested.limit ?? 0);
+      if (!Number.isFinite(chatId) || chatId === 0) {
+        throw new Error("chat id is required for drive items");
+      }
+      const params = new URLSearchParams({ chat_id: String(chatId) });
+      if (Number.isFinite(offset) && offset > 0) {
+        params.set("offset", String(Math.trunc(offset)));
+      }
+      if (Number.isFinite(limit) && limit > 0) {
+        params.set("limit", String(Math.trunc(limit)));
+      }
+      return await fetchJson<T>(`/api/fs/drive/items?${params.toString()}`);
     }
 
     case "folder_settings_bootstrap_many": {

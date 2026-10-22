@@ -473,7 +473,10 @@ export class UploadManager {
     options: UploadConfirmDraft["options"];
   }): Promise<{ createdFolderStructure: boolean }> {
     const target = (args.targetVirtualPath || "").trim();
-    if (!target.startsWith("tg://saved")) {
+    // Drive roots target that chat directly; the VFS folder pre-creation
+    // logic below only applies to Saved Messages paths.
+    const isDriveTarget = /^tg:\/\/drive\/-?\d+$/.test(target);
+    if (!isDriveTarget && !target.startsWith("tg://saved")) {
       throw new Error("Upload is available in Saved Messages only.");
     }
     if (this.isRecycleBinVirtualPath(target)) {
@@ -485,7 +488,7 @@ export class UploadManager {
 
     await this.init();
 
-    const rootDbPath = this.virtualToSavedPath(target);
+    const rootDbPath = isDriveTarget ? target : this.virtualToSavedPath(target);
 
     // The same file staged twice must upload once: duplicate entries upload
     // twice and make the explorer draw a placeholder row per entry for one
@@ -500,9 +503,11 @@ export class UploadManager {
       const rel = normalizeRelPath(entry.relativePath) || entry.file.name;
       const parts = rel.split("/").filter(Boolean);
       const dirs = parts.slice(0, -1);
-      const destinationDbPath = dirs.length
-        ? joinSavedDbPath(rootDbPath, dirs.join("/"))
-        : rootDbPath;
+      // Drives are flat chat listings: no VFS subfolders to nest under.
+      const destinationDbPath =
+        isDriveTarget || !dirs.length
+          ? rootDbPath
+          : joinSavedDbPath(rootDbPath, dirs.join("/"));
       const uploadId = createUploadId();
       tasks.push({
         uploadId,
@@ -526,10 +531,12 @@ export class UploadManager {
     this.placeholderVirtualPath = null;
 
     // Pre-resolve and create folder tree BEFORE any uploads start.
-    const createdFolderStructure = tasks.some((t) =>
-      t.relativePath.includes("/"),
-    );
-    await this.ensureFolders(rootDbPath, tasks);
+    // Drives have no VFS folders to create — their listing is live history.
+    const createdFolderStructure =
+      !isDriveTarget && tasks.some((t) => t.relativePath.includes("/"));
+    if (!isDriveTarget) {
+      await this.ensureFolders(rootDbPath, tasks);
+    }
 
     // Enqueue tasks.
     this.tasks = tasks;

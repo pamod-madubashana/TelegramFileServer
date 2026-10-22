@@ -657,6 +657,12 @@ export const virtualToSavedPath = (virtualPath: string): string => {
 };
 
 export const savedToVirtualPath = (savedPath: string): string => {
+  // Drive upload destinations stay drive paths end-to-end so the placeholder
+  // row is drawn inside the drive the user is browsing.
+  if (savedPath.trim().startsWith("tg://drive/")) {
+    return savedPath.trim();
+  }
+
   const normalized = normalizePath(savedPath).replace(/\/+$/, "");
   if (normalized === "/Home") {
     return "tg://saved";

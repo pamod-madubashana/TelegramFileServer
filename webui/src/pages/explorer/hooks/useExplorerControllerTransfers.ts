@@ -70,11 +70,14 @@ export function useExplorerControllerTransfers({
       if (!droppedEntries.length) {
         return;
       }
-      if (!currentPath.startsWith("tg://saved")) {
+      if (
+        !currentPath.startsWith("tg://saved") &&
+        !currentPath.startsWith("tg://drive/")
+      ) {
         toast({
           title: "Upload unavailable",
           description:
-            "Drag-and-drop upload is available in Saved Messages only.",
+            "Drag-and-drop upload is available in Saved Messages and drives.",
           variant: "destructive",
         });
         return;

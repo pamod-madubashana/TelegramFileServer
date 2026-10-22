@@ -1,12 +1,14 @@
-import { Images, Star, FolderOpen, Trash2, Clock } from "lucide-react";
+import { Images, Star, FolderOpen, Trash2, Clock, HardDrive } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getDefaultFolderSymbol } from "@/components/skybox/folderSymbols";
+import { apiJson } from "@/lib/auth";
 import {
   INTERNAL_DRAG_MIME,
   INTERNAL_DRAG_MIME_LIST,
+  STORAGE_KEY_CHAT_DRIVES,
   isGalleryPath,
   isRecycleBinPath,
 } from "@/pages/explorer/shared";
@@ -38,6 +40,12 @@ interface UserInfo {
   profile_photo?: string;
 }
 
+/** One user-registered extra chat browsable as a drive. */
+interface DriveEntry {
+  chat_id: number;
+  label?: string;
+}
+
 interface ExplorerSidebarProps {
   currentPath?: string;
   favoritePaths?: string[];
@@ -62,6 +70,7 @@ export function ExplorerSidebar({
   const location = useLocation();
   const photoUrl = avatarUrl?.trim();
   const [photoFailed, setPhotoFailed] = useState(false);
+  const [drives, setDrives] = useState<DriveEntry[]>([]);
   const activateOnDragTimerRef = useRef<number | null>(null);
   const activateOnDragPathRef = useRef<string | null>(null);
   const folderFavoritePaths = favoritePaths.filter(
@@ -91,6 +100,37 @@ export function ExplorerSidebar({
   useEffect(() => {
     setPhotoFailed(false);
   }, [photoUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiJson<{ drives?: DriveEntry[] }>("/api/storage/drives")
+      .then((result) => {
+        if (cancelled) return;
+        const list = Array.isArray(result?.drives) ? result.drives : [];
+        setDrives(list);
+        // Explorer tab titles read this cache for friendly drive names.
+        try {
+          window.localStorage.setItem(
+            STORAGE_KEY_CHAT_DRIVES,
+            JSON.stringify(
+              list.map((drive) => ({
+                id: drive.chat_id,
+                title:
+                  drive.label?.trim() || `Chat ${drive.chat_id}`,
+              })),
+            ),
+          );
+        } catch {
+          // localStorage failures only cost the friendly tab title.
+        }
+      })
+      .catch(() => {
+        // Signed out or offline: the Drives section just stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -325,6 +365,44 @@ export function ExplorerSidebar({
             </button>
           );
         })}
+
+        {drives.length > 0 && (
+          <>
+            <div className="px-2 pt-4 pb-1.5">
+              <span className="text-small text-muted-foreground uppercase tracking-wider inline-flex items-center gap-2">
+                <HardDrive className="w-4 h-4" />
+                Drives
+              </span>
+            </div>
+
+            {drives.map((drive) => {
+              const itemPath = `tg://drive/${drive.chat_id}`;
+              const label =
+                drive.label?.trim() || `Chat ${drive.chat_id}`;
+              const isActive =
+                !!currentPath &&
+                (currentPath === itemPath ||
+                  currentPath.startsWith(`${itemPath}/`));
+              return (
+                <button
+                  key={drive.chat_id}
+                  onClick={() => handleRootClick(itemPath)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 w-full text-left ${
+                    isActive
+                      ? "bg-sidebar-accent text-primary font-medium"
+                      : "text-foreground hover:bg-sidebar-accent/50"
+                  }`}
+                  title={itemPath}
+                >
+                  <HardDrive className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-body font-medium truncate">
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </>
+        )}
 
         {dedupedRecentPaths.length > 0 && (
           <>
