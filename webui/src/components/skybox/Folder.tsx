@@ -57,7 +57,7 @@ const Folder = ({
         selected
           ? "bg-sidebar-accent/70 border-primary/25 shadow-[0_18px_40px_rgba(0,0,0,0.18)]"
           : "border-transparent hover:border-border hover:bg-sidebar-accent/50"
-      } ${isDropTarget ? "translate-y-[-1px] scale-[1.02] ring-1 ring-primary/60 bg-primary/10 shadow-[0_12px_28px_rgba(16,185,129,0.14)]" : ""} ${isDropSuccess ? "ring-1 ring-primary/55 bg-primary/10 shadow-[0_0_0_1px_rgba(34,197,94,0.08),0_10px_28px_rgba(34,197,94,0.12)]" : ""} ${isDragging ? "scale-[0.97] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`}
+      } ${isDropTarget ? "translate-y-[-1px] scale-[1.02] ring-1 ring-primary/60 bg-primary/10 shadow-[0_12px_28px_rgba(84,169,244,0.14)]" : ""} ${isDropSuccess ? "ring-1 ring-primary/55 bg-primary/10 shadow-[0_0_0_1px_rgba(84,169,244,0.08),0_10px_28px_rgba(84,169,244,0.12)]" : ""} ${isDragging ? "scale-[0.97] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`}
     >
       <div
         className={`relative mb-2 mx-auto flex aspect-square max-h-24 w-full max-w-24 items-center justify-center overflow-hidden rounded-xl transition-[transform,opacity,filter] duration-200 ease-out ${

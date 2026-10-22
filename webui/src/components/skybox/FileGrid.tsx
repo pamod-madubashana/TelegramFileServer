@@ -191,12 +191,12 @@ function FileGridItem({
               isSelected
                 ? "ring-2 ring-primary/70 ring-inset"
                 : "hover:brightness-110"
-            } ${isDropTarget ? "scale-[1.015] ring-2 ring-primary/70 ring-inset shadow-[0_12px_28px_rgba(16,185,129,0.16)]" : ""} ${isDropSuccess ? "ring-2 ring-primary/60 ring-inset shadow-[0_0_0_1px_rgba(34,197,94,0.08),0_10px_24px_rgba(34,197,94,0.12)]" : ""} ${isDragging ? "scale-[0.96] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`
+            } ${isDropTarget ? "scale-[1.015] ring-2 ring-primary/70 ring-inset shadow-[0_12px_28px_rgba(84,169,244,0.16)]" : ""} ${isDropSuccess ? "ring-2 ring-primary/60 ring-inset shadow-[0_0_0_1px_rgba(84,169,244,0.08),0_10px_24px_rgba(84,169,244,0.12)]" : ""} ${isDragging ? "scale-[0.96] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`
           : `group flex flex-col items-center p-2 rounded-xl transition-[transform,opacity,background-color,box-shadow,border-color] duration-200 ease-out border ${
               isSelected
                 ? "bg-sidebar-accent border-primary/30 shadow-lg shadow-primary/5"
                 : "hover:bg-sidebar-accent/50 border-transparent hover:border-border"
-            } ${isDropTarget ? "translate-y-[-1px] scale-[1.02] ring-1 ring-primary/60 bg-primary/10 shadow-[0_12px_28px_rgba(16,185,129,0.14)]" : ""} ${isDropSuccess ? "ring-1 ring-primary/55 bg-primary/10 shadow-[0_0_0_1px_rgba(34,197,94,0.08),0_10px_24px_rgba(34,197,94,0.12)]" : ""} ${isDragging ? "scale-[0.97] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`
+            } ${isDropTarget ? "translate-y-[-1px] scale-[1.02] ring-1 ring-primary/60 bg-primary/10 shadow-[0_12px_28px_rgba(84,169,244,0.14)]" : ""} ${isDropSuccess ? "ring-1 ring-primary/55 bg-primary/10 shadow-[0_0_0_1px_rgba(84,169,244,0.08),0_10px_24px_rgba(84,169,244,0.12)]" : ""} ${isDragging ? "scale-[0.97] opacity-45" : ""} ${isCutItem ? "opacity-50 grayscale" : ""}`
       }
     >
       <div

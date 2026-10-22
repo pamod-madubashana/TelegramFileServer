@@ -275,13 +275,13 @@ export default function SetupPage() {
 
   const dotClass = (n: number) =>
     n === step
-      ? "bg-primary text-primary-foreground border-primary shadow-[0_0_0_5px_rgba(34,211,238,0.08)]"
+      ? "bg-primary text-primary-foreground border-primary shadow-[0_0_0_5px_rgba(84,169,244,0.14)]"
       : n < step
-        ? "border-emerald-400/45 text-foreground"
+        ? "border-primary/45 text-foreground"
         : "border-border text-foreground";
 
   const lineClass = (n: 1 | 2) =>
-    n < step ? "bg-emerald-400/45" : "bg-border";
+    n < step ? "bg-primary/45" : "bg-border";
 
   return (
     <div className="h-full bg-background flex flex-col">

@@ -21,8 +21,8 @@
     --popover: 0 0% 12% / 0.65;
     --popover-foreground: 0 0% 90%;
 
-    --primary: 142 70% 45%;
-    /* Green accent */
+    --primary: 208 88% 64%;
+    /* Blue accent (#54A9F4) */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 0 0% 100% / 0.05;
@@ -33,8 +33,8 @@
     --muted-foreground: 0 0% 50%;
     /* #808080 */
 
-    --accent: 142 70% 50%;
-    /* Green hover */
+    --accent: 208 88% 68%;
+    /* Blue hover */
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 70% 50%;
@@ -43,27 +43,27 @@
 
     --border: 0 0% 100% / 0.08;
     --input: 0 0% 100% / 0.05;
-    --ring: 142 70% 45%;
+    --ring: 208 88% 64%;
 
     --radius: 12px;
 
     /* Glass panel tokens */
     --panel: 0 0% 100% / 0.03;
     --panel-2: 0 0% 100% / 0.06;
-    --telegram-accent: 142 70% 45%;
-    --telegram-accent-hover: 142 70% 50%;
+    --telegram-accent: 208 88% 64%;
+    --telegram-accent-hover: 208 88% 68%;
     --telegram-border: 0 0% 100% / 0.08;
     --telegram-divider: 0 0% 100% / 0.04;
 
     /* Glass sidebar tokens */
     --sidebar-background: 0 0% 100% / 0.02;
     --sidebar-foreground: 0 0% 90%;
-    --sidebar-primary: 142 70% 45%;
+    --sidebar-primary: 208 88% 64%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 0 0% 100% / 0.08;
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 0 0% 100% / 0.06;
-    --sidebar-ring: 142 70% 45%;
+    --sidebar-ring: 208 88% 64%;
 
     /* Glass effects */
     --glass-blur: 20px;
@@ -518,10 +518,10 @@
     background: hsl(0 0% 100% / 0.08);
   }
 
-  /* Active sidebar item with green accent */
+  /* Active sidebar item with blue accent */
   .sidebar-active {
     background: hsl(0 0% 100% / 0.06);
-    border-left: 3px solid hsl(142 70% 45%);
+    border-left: 3px solid hsl(208 88% 64%);
   }
 }
 

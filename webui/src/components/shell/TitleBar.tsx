@@ -728,7 +728,7 @@ export function TitleBar() {
                           draggedTabId &&
                           draggedTabId !== tab.id ? (
                             <div
-                              className={`pointer-events-none absolute top-1 bottom-1 z-10 w-[2px] rounded-full bg-primary/75 shadow-[0_0_0_1px_rgba(34,197,94,0.18)] transition-[left,right,opacity] duration-150 ease-out ${
+                              className={`pointer-events-none absolute top-1 bottom-1 z-10 w-[2px] rounded-full bg-primary/75 shadow-[0_0_0_1px_rgba(84,169,244,0.18)] transition-[left,right,opacity] duration-150 ease-out ${
                                 dropTargetEdge === "before"
                                   ? "left-[-2px]"
                                   : "right-[-2px]"
