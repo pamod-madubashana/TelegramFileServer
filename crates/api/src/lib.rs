@@ -361,11 +361,25 @@ struct UserDoc {
     /// accounts that have not opened a chat with the bot.
     #[serde(default)]
     storage_chat_id: Option<i64>,
+    /// Extra Telegram chats this account may browse as live "drives" in the
+    /// explorer sidebar. Additive to the effective storage chat, which is
+    /// always allowed without being listed here.
+    #[serde(default)]
+    storage_drives: Vec<DriveEntry>,
     created_at: chrono::DateTime<chrono::Utc>,
     /// Username of the admin who created this account.
     /// `None` marks the owner account (bootstrap admin from config owner_id).
     #[serde(default)]
     created_by: Option<String>,
+}
+
+/// One user-added drive chat: the chat id plus an optional display label
+/// (bots cannot resolve chat titles, so the label is operator-supplied).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DriveEntry {
+    chat_id: i64,
+    #[serde(default)]
+    label: String,
 }
 
 impl UserDoc {
@@ -866,6 +880,7 @@ async fn bootstrap_owner_account(
                 telegram_last_name: last_name,
                 permissions: default_permissions(),
                 storage_chat_id: None,
+                storage_drives: Vec::new(),
                 created_at: chrono::Utc::now(),
                 created_by: None,
             };
@@ -1457,6 +1472,7 @@ async fn auth_change_username(
         telegram_last_name: me.telegram_last_name.clone(),
         permissions: me.permissions,
         storage_chat_id: me.storage_chat_id,
+        storage_drives: me.storage_drives.clone(),
         created_at: me.created_at,
         created_by: me.created_by.clone(),
     };
@@ -2387,6 +2403,7 @@ async fn admin_create_user(
         telegram_last_name: None,
         permissions: default_permissions(),
         storage_chat_id: None,
+        storage_drives: Vec::new(),
         created_at: chrono::Utc::now(),
         created_by: Some(actor.username.clone()),
     };
@@ -2561,6 +2578,13 @@ fn storage_chat_for(user: &UserDoc, default_chat_id: i64) -> i64 {
     user.storage_chat_id.unwrap_or(default_chat_id)
 }
 
+/// True when `chat_id` may be browsed/uploaded as a drive by this user:
+/// either it is the effective storage chat, or it is one of the user's
+/// registered extra drives.
+fn drive_chat_allowed(user: &UserDoc, effective: i64, chat_id: i64) -> bool {
+    chat_id == effective || user.storage_drives.iter().any(|d| d.chat_id == chat_id)
+}
+
 /// Fallback chat id from `v2_setup` (stored in the clear, next to the
 /// encrypted payload — no wizard password needed to serve files).
 async fn default_chat_id(client: &mongodb::Client) -> ApiResult<i64> {
@@ -2571,6 +2595,304 @@ async fn default_chat_id(client: &mongodb::Client) -> ApiResult<i64> {
         ));
     }
     Ok(config.default_chat_id)
+}
+
+// ===== Storage settings (usage stats + chat management) =====
+
+/// One media-type slice of the caller's Telegram storage.
+#[derive(Debug, Serialize)]
+struct StorageStatsBucket {
+    media_type: String,
+    count: i64,
+    total_bytes: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StorageStatsResponse {
+    buckets: Vec<StorageStatsBucket>,
+    total_files: i64,
+    total_bytes: i64,
+}
+
+/// GET /api/fs/stats — byte/count totals per media type for the caller's
+/// files (recycled items excluded). Powers the storage pie chart.
+async fn fs_storage_stats(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StorageStatsResponse>> {
+    let owner = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let coll: Collection<bson::Document> = client
+        .database(&data_database_name())
+        .collection(files::FileDoc::COLLECTION_NAME);
+    let pipeline = vec![
+        doc! { "$match": { "owner_id": &owner, "original_path": null } },
+        doc! { "$group": {
+            "_id": "$media_type",
+            "count": { "$sum": 1i64 },
+            "total_bytes": { "$sum": "$file_size" },
+        } },
+        doc! { "$sort": { "total_bytes": -1i64 } },
+    ];
+    let mut cursor = coll
+        .aggregate(pipeline)
+        .await
+        .map_err(|e| ApiError::Database(DbError::from(e)))?;
+    let mut buckets = Vec::new();
+    while let Some(row) = cursor
+        .try_next()
+        .await
+        .map_err(|e| ApiError::Database(DbError::from(e)))?
+    {
+        let media_type = row
+            .get_str("_id")
+            .unwrap_or("document")
+            .to_string();
+        let count = row.get_i64("count").unwrap_or(0);
+        let total_bytes = row.get_i64("total_bytes").unwrap_or(0);
+        buckets.push(StorageStatsBucket {
+            media_type,
+            count,
+            total_bytes,
+        });
+    }
+    let total_files = buckets.iter().map(|b| b.count).sum();
+    let total_bytes = buckets.iter().map(|b| b.total_bytes).sum();
+    Ok(Json(StorageStatsResponse {
+        buckets,
+        total_files,
+        total_bytes,
+    }))
+}
+
+/// Current storage-chat view for the signed-in user.
+#[derive(Debug, Serialize)]
+struct StorageChatResponse {
+    /// Setup-wizard fallback every account uses unless overridden.
+    default_chat_id: i64,
+    /// Per-account override; `None` = follow the default.
+    user_storage_chat_id: Option<i64>,
+    /// What uploads actually use right now.
+    effective_chat_id: i64,
+    /// True when the caller may change the global default (admin).
+    can_change_default: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct StorageChatPut {
+    /// Personal override. Absent = unchanged; `null` = clear (use default).
+    #[serde(default)]
+    storage_chat_id: Option<Option<i64>>,
+    /// Global default — admin only. 0 is invalid; negatives are valid.
+    #[serde(default)]
+    default_chat_id: Option<i64>,
+}
+
+/// GET /api/storage/chat — default + personal override + effective chat id.
+async fn storage_chat_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StorageChatResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    let default = default_chat_id(&client).await.unwrap_or(0);
+    let is_admin = user.is_admin();
+    Ok(Json(StorageChatResponse {
+        // The global default chat is admin-only (r/w): mask it from others.
+        default_chat_id: if is_admin { default } else { 0 },
+        user_storage_chat_id: user.storage_chat_id,
+        effective_chat_id: storage_chat_for(&user, default),
+        can_change_default: is_admin,
+    }))
+}
+
+/// PUT /api/storage/chat — set/clear the personal override; admins may also
+/// replace the global default chat in the same call.
+async fn storage_chat_put(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<StorageChatPut>,
+) -> ApiResult<Json<StorageChatResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let mut user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    if let Some(new_default) = input.default_chat_id {
+        if !user.is_admin() {
+            return Err(ApiError::Forbidden(
+                "administrator access required to change the default chat".to_string(),
+            ));
+        }
+        if new_default == 0 {
+            return Err(ApiError::Validation(
+                "default_chat_id must be a real chat id (0 is invalid, negatives are valid)"
+                    .to_string(),
+            ));
+        }
+        let mut config = load_config(&client).await?;
+        config.default_chat_id = new_default;
+        save_config(&client, &config).await?;
+    }
+
+    if let Some(personal) = input.storage_chat_id {
+        match personal {
+            Some(0) => {
+                return Err(ApiError::Validation(
+                    "storage_chat_id must be a real chat id (0 is invalid, negatives are valid)"
+                        .to_string(),
+                ));
+            }
+            Some(id) => {
+                update_user_fields(&client, &user.id, doc! { "storage_chat_id": id }).await?;
+                user.storage_chat_id = Some(id);
+            }
+            None => {
+                update_user_fields(
+                    &client,
+                    &user.id,
+                    doc! { "storage_chat_id": bson::Bson::Null },
+                )
+                .await?;
+                user.storage_chat_id = None;
+            }
+        }
+    }
+
+    let default = default_chat_id(&client).await.unwrap_or(0);
+    let is_admin = user.is_admin();
+    Ok(Json(StorageChatResponse {
+        default_chat_id: if is_admin { default } else { 0 },
+        user_storage_chat_id: user.storage_chat_id,
+        effective_chat_id: storage_chat_for(&user, default),
+        can_change_default: is_admin,
+    }))
+}
+
+/// Serialized drive list for the signed-in user.
+#[derive(Debug, Serialize)]
+struct StorageDrivesResponse {
+    drives: Vec<DriveEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StorageDrivePut {
+    chat_id: i64,
+    #[serde(default)]
+    label: String,
+}
+
+/// GET /api/storage/drives — the caller's extra browseable drive chats.
+async fn storage_drives_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StorageDrivesResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    Ok(Json(StorageDrivesResponse {
+        drives: user.storage_drives,
+    }))
+}
+
+/// POST /api/storage/drives — register an extra drive chat.
+///
+/// The bot must be able to read the chat, so the add is probed with
+/// `latest_message_id` before it is persisted: an unreadable chat fails
+/// fast instead of surfacing later as an empty sidebar entry.
+async fn storage_drives_post(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<StorageDrivePut>,
+) -> ApiResult<(StatusCode, Json<StorageDrivesResponse>)> {
+    if input.chat_id == 0 {
+        return Err(ApiError::Validation(
+            "chat_id must be a real chat id (0 is invalid, negatives are valid)".to_string(),
+        ));
+    }
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let mut user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    if user.storage_drives.iter().any(|d| d.chat_id == input.chat_id) {
+        return Err(ApiError::Conflict(format!(
+            "chat {} is already a drive",
+            input.chat_id
+        )));
+    }
+
+    // Probe readability before saving — the bot must be a member of the chat.
+    {
+        let pool = state.transfer_pool().await?;
+        let lease = pool
+            .lease()
+            .await
+            .map_err(|e| ApiError::Telegram(e.to_string()))?;
+        lease
+            .client()
+            .latest_message_id(input.chat_id)
+            .await
+            .map_err(|e| {
+                ApiError::Validation(format!(
+                    "bot cannot read chat {chat_id}: {e}",
+                    chat_id = input.chat_id
+                ))
+            })?;
+    }
+
+    let entry = DriveEntry {
+        chat_id: input.chat_id,
+        label: input.label.trim().to_string(),
+    };
+    user.storage_drives.push(entry);
+    update_user_fields(
+        &client,
+        &user.id,
+        doc! { "storage_drives": bson::to_bson(&user.storage_drives).map_err(|e| ApiError::Internal(e.to_string()))? },
+    )
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(StorageDrivesResponse {
+            drives: user.storage_drives,
+        }),
+    ))
+}
+
+/// DELETE /api/storage/drives/{chat_id} — drop one drive from the caller.
+async fn storage_drives_delete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(chat_id): Path<i64>,
+) -> ApiResult<Json<StorageDrivesResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let mut user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    let before = user.storage_drives.len();
+    user.storage_drives.retain(|d| d.chat_id != chat_id);
+    if user.storage_drives.len() == before {
+        return Err(ApiError::NotFound(format!("no drive for chat {chat_id}")));
+    }
+    update_user_fields(
+        &client,
+        &user.id,
+        doc! { "storage_drives": bson::to_bson(&user.storage_drives).map_err(|e| ApiError::Internal(e.to_string()))? },
+    )
+    .await?;
+    Ok(Json(StorageDrivesResponse {
+        drives: user.storage_drives,
+    }))
 }
 
 /// One file spooled to disk, ready to be handed to Telegram.
@@ -2647,6 +2969,7 @@ async fn files_upload(
     }
 
     let mut folder: Option<String> = None;
+    let mut upload_chat_id: Option<i64> = None;
     let mut staged: Option<StagedUpload> = None;
 
     while let Some(mut field) = multipart
@@ -2662,6 +2985,23 @@ async fn files_upload(
                     .await
                     .map_err(|e| ApiError::Validation(format!("malformed path field: {e}")))?;
                 folder = Some(String::from_utf8_lossy(&raw).into_owned());
+            }
+            Some("chat_id") => {
+                let raw = field
+                    .bytes()
+                    .await
+                    .map_err(|e| ApiError::Validation(format!("malformed chat_id field: {e}")))?;
+                let text = String::from_utf8_lossy(&raw);
+                let parsed: i64 = text.trim().parse().map_err(|_| {
+                    ApiError::Validation("chat_id must be an integer chat id".to_string())
+                })?;
+                if parsed == 0 {
+                    return Err(ApiError::Validation(
+                        "chat_id must be a real chat id (0 is invalid, negatives are valid)"
+                            .to_string(),
+                    ));
+                }
+                upload_chat_id = Some(parsed);
             }
             Some("file") if staged.is_none() => {
                 let raw_name = field.file_name().unwrap_or("upload.bin").to_string();
@@ -2680,7 +3020,21 @@ async fn files_upload(
         .ok_or_else(|| ApiError::Validation("missing \"file\" field in the upload".to_string()))?;
     let folder = files::normalize_folder(folder.as_deref().unwrap_or(""), &staged.file_name);
 
-    let chat_id = storage_chat_for(&user, default_chat_id(&client).await?);
+    let default = default_chat_id(&client).await?;
+    let effective = storage_chat_for(&user, default);
+    // Active-drive uploads pass their drive's chat id; everything else keeps
+    // the personal/default storage chat.
+    let chat_id = match upload_chat_id {
+        Some(target) => {
+            if !drive_chat_allowed(&user, effective, target) {
+                return Err(ApiError::Forbidden(
+                    "chat is not a storage drive of this account".to_string(),
+                ));
+            }
+            target
+        }
+        None => effective,
+    };
     let extension = std::path::Path::new(&staged.file_name)
         .extension()
         .and_then(|e| e.to_str())
@@ -2950,6 +3304,351 @@ where
             "expected `true`, `false`, `1` or `0`, got `{other}`"
         ))),
     }
+}
+
+// ===== Live drive browsing (extra chat drives) =====
+
+/// Serialised drive item, shaped exactly like the legacy
+/// `TelegramChatDriveItem` the webui's `driveItemToFileItem` already consumes.
+#[derive(Debug, Serialize)]
+struct DriveItem {
+    chat_id: i64,
+    message_id: i32,
+    media_kind: String,
+    content_type: String,
+    file_name: String,
+    file_size: u64,
+    file_extension: Option<String>,
+    mime_type: Option<String>,
+    caption: Option<String>,
+    modified_at: String,
+    thumbnail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DriveItemsPage {
+    items: Vec<DriveItem>,
+    has_more: bool,
+    next_offset: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DriveItemsQuery {
+    chat_id: i64,
+    /// Exclusive upper bound on message ids; 0/absent = start at the newest.
+    #[serde(default)]
+    offset: i32,
+    #[serde(default = "drive_page_size")]
+    limit: u32,
+}
+
+fn drive_page_size() -> u32 {
+    60
+}
+
+fn media_kind_str(media_type: MediaType) -> &'static str {
+    match media_type {
+        MediaType::Photo => "photo",
+        MediaType::Video => "video",
+        MediaType::Audio => "audio",
+        MediaType::Voice => "voice",
+        MediaType::Document => "document",
+        MediaType::Animation => "animation",
+        MediaType::Sticker => "sticker",
+    }
+}
+
+/// Session + read permission + "this chat is a drive of this user".
+/// Returns the signed-in user on success.
+async fn require_drive_access(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+    chat_id: i64,
+) -> Result<UserDoc, ApiError> {
+    let owner = files::require_media_session(headers, query_token, &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &owner)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.permissions.read {
+        return Err(ApiError::Forbidden(
+            "this account cannot view files".to_string(),
+        ));
+    }
+    if chat_id == 0 {
+        return Err(ApiError::Validation(
+            "chat_id must be a real chat id (0 is invalid, negatives are valid)".to_string(),
+        ));
+    }
+    let effective = storage_chat_for(&user, default_chat_id(&client).await.unwrap_or(0));
+    if !drive_chat_allowed(&user, effective, chat_id) {
+        return Err(ApiError::Forbidden(
+            "chat is not a storage drive of this account".to_string(),
+        ));
+    }
+    Ok(user)
+}
+
+/// GET /api/fs/drive/items — page a drive chat's media newest-first.
+///
+/// Live read via `list_history` (no Mongo rows required): `offset == 0`
+/// probes the newest message id, otherwise `offset` is the same exclusive
+/// upper bound the history indexer walks with.
+async fn fs_drive_items(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DriveItemsQuery>,
+) -> ApiResult<Json<DriveItemsPage>> {
+    require_drive_access(&state, &headers, None, query.chat_id).await?;
+
+    if query.limit == 0 || query.limit > 200 {
+        return Err(ApiError::InvalidInput(
+            "limit must be between 1 and 200".to_string(),
+        ));
+    }
+
+    let pool = state.transfer_pool().await?;
+    let lease = pool
+        .lease()
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let client = lease.client();
+
+    let mut upper = query.offset;
+    if upper <= 0 {
+        let latest = client.latest_message_id(query.chat_id).await.map_err(|e| {
+            ApiError::Telegram(format!("could not read chat {}: {e}", query.chat_id))
+        })?;
+        if latest <= 0 {
+            return Ok(Json(DriveItemsPage {
+                items: Vec::new(),
+                has_more: false,
+                next_offset: 0,
+            }));
+        }
+        upper = latest.saturating_add(1);
+    }
+
+    let page = client
+        .list_history(query.chat_id, upper, query.limit)
+        .await
+        .map_err(|e| ApiError::Telegram(format!("history listing failed: {e}")))?;
+    drop(lease);
+
+    let mut items = Vec::with_capacity(page.len());
+    for (sent, caption) in &page {
+        let extension = std::path::Path::new(&sent.file_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string);
+        items.push(DriveItem {
+            chat_id: sent.chat_id,
+            message_id: sent.message_id,
+            media_kind: media_kind_str(sent.media_type).to_string(),
+            content_type: sent.mime_type.clone(),
+            file_name: sent.file_name.clone(),
+            file_size: sent.file_size,
+            file_extension: extension,
+            mime_type: Some(sent.mime_type.clone()),
+            caption: caption.clone(),
+            modified_at: sent
+                .date
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            thumbnail: Some(format!(
+                "/api/fs/drive/thumbnail?chat_id={}&message_id={}&quality=low",
+                sent.chat_id, sent.message_id
+            )),
+        });
+    }
+
+    // The requested window was [upper - limit, upper); when it reached id 1
+    // (or below), there is nothing older left to page.
+    let next_offset = (upper - query.limit as i32).max(1);
+    let has_more = next_offset > 1 && !page.is_empty();
+    Ok(Json(DriveItemsPage {
+        items,
+        has_more,
+        next_offset,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct DriveMediaQuery {
+    chat_id: i64,
+    message_id: i32,
+    /// Filename for Content-Disposition; falls back to `file` on Telegram.
+    name: Option<String>,
+    token: Option<String>,
+    #[serde(default, deserialize_with = "flexible_bool")]
+    inline: Option<bool>,
+}
+
+/// GET /api/fs/drive/media — stream one live drive message's file.
+///
+/// Same Range-capable streaming as `/api/fs/media`, but keyed on
+/// chat+message instead of a Mongo FileDoc, so never-indexed chats work.
+async fn fs_drive_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    method: Method,
+    Query(query): Query<DriveMediaQuery>,
+) -> ApiResult<Response> {
+    require_drive_access(&state, &headers, query.token.as_deref(), query.chat_id).await?;
+
+    let pool = state.transfer_pool().await?;
+    let lease = pool
+        .lease()
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let engine = TransferEngine::with_default_config(lease.client());
+
+    let media = engine
+        .get_media(query.chat_id, query.message_id)
+        .await
+        .map_err(|e| ApiError::Telegram(format!("could not read the file: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("file no longer exists on Telegram".to_string()))?;
+
+    let file_name = query
+        .name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(files::sanitize_file_name)
+        .transpose()?
+        .unwrap_or_else(|| media.file_name.clone());
+    let mime_type = if media.mime_type.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        media.mime_type.clone()
+    };
+    let file_size = if media.file_size > 0 {
+        media.file_size
+    } else {
+        0
+    };
+
+    let range =
+        files::parse_byte_range(headers.get(RANGE).and_then(|v| v.to_str().ok()), file_size);
+    let inline = query.inline.unwrap_or(true);
+    let disposition = files::content_disposition(&file_name, inline);
+    if let files::ByteRange::Unsatisfiable = range {
+        let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+        if let Ok(value) = HeaderValue::from_str(&format!("bytes */{file_size}")) {
+            response.headers_mut().insert(CONTENT_RANGE, value);
+        }
+        return Ok(response);
+    }
+
+    let status = if range.is_partial() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let mut builder = Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, mime_type)
+        .header(CONTENT_LENGTH, range.len(file_size))
+        .header(CONTENT_DISPOSITION, disposition)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CACHE_CONTROL, "public, max-age=3600, immutable");
+    if let files::ByteRange::Part { start, end } = range {
+        builder = builder.header(CONTENT_RANGE, format!("bytes {start}-{end}/{file_size}"));
+    }
+
+    if method == Method::HEAD || file_size == 0 {
+        return builder
+            .body(Body::empty())
+            .map_err(|e| ApiError::Internal(format!("response build failed: {e}")));
+    }
+
+    let (start, length) = match range {
+        files::ByteRange::Part { start, end } => (start, end - start + 1),
+        _ => (0, file_size),
+    };
+    let (chat_id, message_id, label) = (query.chat_id, query.message_id, file_name.clone());
+
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    let cancel = CancellationToken::new();
+    tokio::spawn(async move {
+        let _lease = lease;
+        let mut sink = files::StreamSink::new(tx, cancel.clone());
+        let outcome = engine
+            .download_range(
+                chat_id,
+                message_id,
+                DownloadRange::new(start, length),
+                &mut sink,
+                &cancel,
+                None,
+            )
+            .await;
+        match outcome {
+            Ok(()) => tracing::debug!("finished streaming {}", label),
+            Err(TelegramError::Cancelled) => tracing::info!("stream of {} cancelled", label),
+            Err(e) => {
+                cancel.cancel();
+                tracing::warn!("stream of {} failed: {}", label, e);
+            }
+        }
+    });
+
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        let next = rx.recv().await;
+        next.map(|value| (value, rx))
+    });
+    builder
+        .body(Body::from_stream(stream))
+        .map_err(|e| ApiError::Internal(format!("response build failed: {e}")))
+}
+
+#[derive(Debug, Deserialize)]
+struct DriveThumbnailQuery {
+    chat_id: i64,
+    message_id: i32,
+    quality: Option<String>,
+    token: Option<String>,
+}
+
+/// GET /api/fs/drive/thumbnail — preview image for one live drive message.
+async fn fs_drive_thumbnail(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DriveThumbnailQuery>,
+) -> ApiResult<Response> {
+    require_drive_access(&state, &headers, query.token.as_deref(), query.chat_id).await?;
+
+    let quality = match query.quality.as_deref().unwrap_or("low").parse() {
+        Ok(quality) => quality,
+        Err(()) => {
+            return Err(ApiError::InvalidInput(
+                "quality must be \"low\" or \"high\"".to_string(),
+            ));
+        }
+    };
+
+    let pool = state.transfer_pool().await?;
+    let lease = pool
+        .lease()
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let telegram = lease.client();
+    let Some(bytes) = state
+        .thumbnails()
+        .get_or_fetch(telegram.as_ref(), query.chat_id, query.message_id, quality)
+        .await
+    else {
+        return Err(ApiError::NotFound(
+            "no thumbnail is available for this message".to_string(),
+        ));
+    };
+
+    Response::builder()
+        .header(CONTENT_TYPE, "image/jpeg")
+        .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(CONTENT_LENGTH, bytes.len())
+        .body(Body::from(bytes))
+        .map_err(|e| ApiError::Internal(format!("response build failed: {e}")))
 }
 
 // ===== Profile photo + history indexing =====
@@ -3595,6 +4294,24 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/fs/restore", post(vfs::restore_item))
         .route("/api/fs/delete", post(vfs::delete_items))
         .route("/api/fs/gallery", get(vfs::gallery))
+        .route("/api/fs/stats", get(fs_storage_stats))
+        .route(
+            "/api/storage/chat",
+            get(storage_chat_get).put(storage_chat_put),
+        )
+        .route(
+            "/api/storage/drives",
+            get(storage_drives_get).post(storage_drives_post),
+        )
+        .route("/api/storage/drives/:chat_id", delete(storage_drives_delete))
+        // Live drive browsing: pages, media and previews keyed on chat+message
+        // so never-indexed chats work without Mongo rows.
+        .route("/api/fs/drive/items", get(fs_drive_items))
+        .route(
+            "/api/fs/drive/media",
+            get(fs_drive_media).head(fs_drive_media),
+        )
+        .route("/api/fs/drive/thumbnail", get(fs_drive_thumbnail))
         .route("/api/fs/media", get(media_by_message))
     .route("/api/fs/thumbnail", get(thumbnail_by_message))
         .route("/api/fs/index", post(fs_index))
@@ -4061,6 +4778,7 @@ mod tests {
             telegram_last_name: None,
             permissions: default_permissions(),
             storage_chat_id,
+            storage_drives: Vec::new(),
             created_at: chrono::Utc::now(),
             created_by: Some("admin".to_string()),
         }
@@ -4084,6 +4802,46 @@ mod tests {
         let set: AdminUpdateUserRequest =
             serde_json::from_str(r#"{"storage_chat_id": -100500}"#).unwrap();
         assert_eq!(set.storage_chat_id, Some(Some(-100500)));
+    }
+
+    #[test]
+    fn drive_access_covers_the_effective_chat_and_registered_drives_only() {
+        let mut user = sample_user(None);
+        user.storage_drives = vec![
+            DriveEntry {
+                chat_id: -1001,
+                label: "Media".to_string(),
+            },
+            DriveEntry {
+                chat_id: -1002,
+                label: String::new(),
+            },
+        ];
+
+        // The effective storage chat needs no drive registration.
+        assert!(drive_chat_allowed(&user, -777, -777));
+        // Registered drives are allowed.
+        assert!(drive_chat_allowed(&user, -777, -1001));
+        assert!(drive_chat_allowed(&user, -777, -1002));
+        // Anything else — including 0 — is not.
+        assert!(!drive_chat_allowed(&user, -777, -999));
+        assert!(!drive_chat_allowed(&user, -777, 0));
+    }
+
+    #[test]
+    fn drive_entry_deserializes_without_a_label() {
+        let entry: DriveEntry = serde_json::from_str(r#"{"chat_id": -100442}"#).unwrap();
+        assert_eq!(entry.chat_id, -100442);
+        assert_eq!(entry.label, "");
+
+        // A UserDoc written before drives existed still deserializes.
+        let legacy = r#"{
+            "_id": "bob", "username": "bob", "role": "user",
+            "permissions": {"read": true, "write": true},
+            "created_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let user: UserDoc = serde_json::from_str(legacy).unwrap();
+        assert!(user.storage_drives.is_empty());
     }
 
     /// The URI the wizard stored in config.tfs — encrypted under the password

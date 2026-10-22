@@ -67,11 +67,11 @@ impl ThumbnailCache {
         message_id: i32,
         quality: ThumbnailQuality,
     ) -> Option<Vec<u8>> {
-        if let Some(bytes) = self.read(message_id, quality).await {
+        if let Some(bytes) = self.read(chat_id, message_id, quality).await {
             return Some(bytes);
         }
 
-        let key = Self::key(message_id, quality);
+        let key = Self::key(chat_id, message_id, quality);
         if self.is_known_missing(&key) {
             return None;
         }
@@ -80,7 +80,7 @@ impl ThumbnailCache {
         let _serialise = lock.lock().await;
 
         // Another request may have filled the cache while we queued.
-        if let Some(bytes) = self.read(message_id, quality).await {
+        if let Some(bytes) = self.read(chat_id, message_id, quality).await {
             return Some(bytes);
         }
 
@@ -99,6 +99,7 @@ impl ThumbnailCache {
             // the thumbnail for the rest of the session.
             Err(error) => {
                 tracing::warn!(
+                    chat_id,
                     message_id,
                     quality = quality.as_str(),
                     %error,
@@ -108,19 +109,32 @@ impl ThumbnailCache {
             }
         };
 
-        self.store(message_id, quality, &bytes).await?;
+        self.store(chat_id, message_id, quality, &bytes).await?;
         Some(bytes)
     }
 
-    async fn read(&self, message_id: i32, quality: ThumbnailQuality) -> Option<Vec<u8>> {
-        tokio::fs::read(self.path_for(message_id, quality)).await.ok()
+    async fn read(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        quality: ThumbnailQuality,
+    ) -> Option<Vec<u8>> {
+        tokio::fs::read(self.path_for(chat_id, message_id, quality))
+            .await
+            .ok()
     }
 
     /// Write beside the final name and rename into place, so a concurrent
     /// reader never sees a half-written thumbnail.
-    async fn store(&self, message_id: i32, quality: ThumbnailQuality, bytes: &[u8]) -> Option<()> {
+    async fn store(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        quality: ThumbnailQuality,
+        bytes: &[u8],
+    ) -> Option<()> {
         tokio::fs::create_dir_all(&self.root).await.ok()?;
-        let target = self.path_for(message_id, quality);
+        let target = self.path_for(chat_id, message_id, quality);
         let temp = target.with_extension("part");
         {
             let mut file = tokio::fs::File::create(&temp).await.ok()?;
@@ -131,12 +145,15 @@ impl ThumbnailCache {
         Some(())
     }
 
-    fn path_for(&self, message_id: i32, quality: ThumbnailQuality) -> PathBuf {
-        self.root.join(format!("{message_id}-{}.jpg", quality.as_str()))
+    /// Cache keys include the chat: message ids are only unique within one
+    /// chat, so two drives could otherwise collide on the same id.
+    fn path_for(&self, chat_id: i64, message_id: i32, quality: ThumbnailQuality) -> PathBuf {
+        self.root
+            .join(format!("{chat_id}-{message_id}-{}.jpg", quality.as_str()))
     }
 
-    fn key(message_id: i32, quality: ThumbnailQuality) -> String {
-        format!("{message_id}-{}", quality.as_str())
+    fn key(chat_id: i64, message_id: i32, quality: ThumbnailQuality) -> String {
+        format!("{chat_id}-{message_id}-{}", quality.as_str())
     }
 
     fn key_lock(&self, key: String) -> Arc<tokio::sync::Mutex<()>> {
@@ -170,14 +187,34 @@ mod tests {
     #[test]
     fn quality_tiers_get_distinct_cache_files() {
         let cache = ThumbnailCache::new(PathBuf::from("/cache"));
-        assert_eq!(cache.path_for(17, ThumbnailQuality::Low), PathBuf::from("/cache/17-low.jpg"));
-        assert_eq!(cache.path_for(17, ThumbnailQuality::High), PathBuf::from("/cache/17-high.jpg"));
+        assert_eq!(
+            cache.path_for(-100, 17, ThumbnailQuality::Low),
+            PathBuf::from("/cache/-100-17-low.jpg")
+        );
+        assert_eq!(
+            cache.path_for(-100, 17, ThumbnailQuality::High),
+            PathBuf::from("/cache/-100-17-high.jpg")
+        );
+    }
+
+    #[test]
+    fn cache_keys_are_scoped_per_chat() {
+        // Message ids repeat across chats — the same id in two drives must
+        // not share a cache entry.
+        assert_ne!(
+            ThumbnailCache::key(-1001, 42, ThumbnailQuality::Low),
+            ThumbnailCache::key(-1002, 42, ThumbnailQuality::Low)
+        );
+        assert_eq!(
+            ThumbnailCache::key(-1001, 42, ThumbnailQuality::Low),
+            ThumbnailCache::key(-1001, 42, ThumbnailQuality::Low)
+        );
     }
 
     #[tokio::test]
     async fn an_uncached_thumbnail_reads_as_missing() {
         let cache = ThumbnailCache::new(std::env::temp_dir().join("tfs-thumb-absent"));
-        assert!(cache.read(1, ThumbnailQuality::Low).await.is_none());
+        assert!(cache.read(-100, 1, ThumbnailQuality::Low).await.is_none());
     }
 
     #[tokio::test]
@@ -185,21 +222,27 @@ mod tests {
         let root = std::env::temp_dir().join("tfs-thumb-roundtrip");
         let cache = ThumbnailCache::new(root);
         cache
-            .store(9, ThumbnailQuality::High, b"\xff\xd8jpeg")
+            .store(-100, 9, ThumbnailQuality::High, b"\xff\xd8jpeg")
             .await
             .expect("store");
         assert_eq!(
-            cache.read(9, ThumbnailQuality::High).await.as_deref(),
+            cache
+                .read(-100, 9, ThumbnailQuality::High)
+                .await
+                .as_deref(),
             Some(b"\xff\xd8jpeg".as_slice())
         );
         // The temporary file never survives a successful store.
-        assert!(!cache.path_for(9, ThumbnailQuality::High).with_extension("part").exists());
+        assert!(!cache
+            .path_for(-100, 9, ThumbnailQuality::High)
+            .with_extension("part")
+            .exists());
     }
 
     #[tokio::test]
     async fn a_negative_answer_is_remembered() {
         let cache = ThumbnailCache::new(std::env::temp_dir().join("tfs-thumb-miss"));
-        let key = ThumbnailCache::key(4, ThumbnailQuality::Low);
+        let key = ThumbnailCache::key(-100, 4, ThumbnailQuality::Low);
         assert!(!cache.is_known_missing(&key));
         cache.remember_missing(&key);
         assert!(cache.is_known_missing(&key));

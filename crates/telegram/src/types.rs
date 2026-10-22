@@ -100,6 +100,8 @@ pub struct SentMedia {
     pub thumbnail_id: Option<String>,
     /// DC ID where the file is stored
     pub dc_id: i32,
+    /// When the message was sent (`None` when the source did not carry a date).
+    pub date: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Range specification for chunked downloads

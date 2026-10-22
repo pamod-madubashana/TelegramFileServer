@@ -478,6 +478,7 @@ impl GrammersClient {
             file_id: file_id.to_string(),
             thumbnail_id,
             dc_id,
+            date: Some(message.date()),
         })
     }
 

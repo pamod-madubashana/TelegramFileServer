@@ -243,6 +243,7 @@ mod tests {
                 file_id: "test_file_id".into(),
                 thumbnail_id: None,
                 dc_id: 1,
+                date: None,
             })
         }
 
