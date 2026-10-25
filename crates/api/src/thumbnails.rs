@@ -226,17 +226,16 @@ mod tests {
             .await
             .expect("store");
         assert_eq!(
-            cache
-                .read(-100, 9, ThumbnailQuality::High)
-                .await
-                .as_deref(),
+            cache.read(-100, 9, ThumbnailQuality::High).await.as_deref(),
             Some(b"\xff\xd8jpeg".as_slice())
         );
         // The temporary file never survives a successful store.
-        assert!(!cache
-            .path_for(-100, 9, ThumbnailQuality::High)
-            .with_extension("part")
-            .exists());
+        assert!(
+            !cache
+                .path_for(-100, 9, ThumbnailQuality::High)
+                .with_extension("part")
+                .exists()
+        );
     }
 
     #[tokio::test]

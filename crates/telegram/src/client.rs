@@ -393,7 +393,12 @@ impl GrammersClient {
                     present(&t) && !matches!(t, PhotoSize::Stripped(_) | PhotoSize::Path(_))
                 })
                 .max_by_key(|t| t.size())
-                .or_else(|| thumbs.iter().filter(|t| present(&t)).max_by_key(|t| t.size())),
+                .or_else(|| {
+                    thumbs
+                        .iter()
+                        .filter(|t| present(&t))
+                        .max_by_key(|t| t.size())
+                }),
         }
     }
 
@@ -464,8 +469,7 @@ impl GrammersClient {
 
         // Normalise the name last: it may need the mime and media type the
         // branches above decided on.
-        let file_name =
-            Self::document_file_name(&file_name, &mime_type, media_type, message.id());
+        let file_name = Self::document_file_name(&file_name, &mime_type, media_type, message.id());
 
         Ok(SentMedia {
             chat_id: message.peer_id().bot_api_dialog_id().unwrap_or(0),
@@ -639,7 +643,11 @@ impl GrammersClient {
             let start = (id - BATCH + 1).max(best + 1);
             let ids: Vec<i32> = (start..=id).rev().collect();
             let res = client.get_messages_by_id(peer, &ids).await?;
-            if let Some((idx, _)) = res.iter().enumerate()                .find(|(_, m)| m.as_ref().is_some_and(Self::message_exists)) {
+            if let Some((idx, _)) = res
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.as_ref().is_some_and(Self::message_exists))
+            {
                 return Ok(ids[idx]);
             }
             id = start - 1;
@@ -771,7 +779,10 @@ impl TelegramClient for GrammersClient {
         // goes out anyway.
         if Self::as_uploaded_photo(file_path, media_type) {
             match client
-                .send_message(peer, InputMessage::new().photo(uploaded.clone()).text(caption))
+                .send_message(
+                    peer,
+                    InputMessage::new().photo(uploaded.clone()).text(caption),
+                )
                 .await
             {
                 Ok(message) => {
@@ -1151,12 +1162,7 @@ mod tests {
     #[test]
     fn names_that_already_have_an_extension_are_untouched() {
         assert_eq!(
-            GrammersClient::document_file_name(
-                "clip.mkv",
-                "video/x-matroska",
-                MediaType::Video,
-                1
-            ),
+            GrammersClient::document_file_name("clip.mkv", "video/x-matroska", MediaType::Video, 1),
             "clip.mkv"
         );
     }
