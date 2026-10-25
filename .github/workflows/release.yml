@@ -162,6 +162,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           repository: ${{ env.MIRROR_REPO }}
+          # The token must be the input, not env GITHUB_TOKEN: the action's
+          # token input defaults to github.token and takes precedence over
+          # the environment, which silently sends this repo's integration
+          # token to the mirror and fails with 403.
+          token: ${{ env.MIRROR_TOKEN }}
           tag_name: v${{ needs.validate.outputs.version }}
           name: Release v${{ needs.validate.outputs.version }}
           generate_release_notes: true
