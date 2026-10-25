@@ -129,6 +129,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # Releases go to both repos of the pair. Whichever repo runs the
+      # workflow publishes there with its own GITHUB_TOKEN, then mirrors
+      # to the other with MIRROR_REPO_TOKEN (a PAT with contents:write on
+      # that repo). The mirror step is skipped when the secret is absent.
+      MIRROR_REPO: ${{ github.repository == 'The-KLYRO/TelegramFileServer' && 'pamod-madubashana/TelegramFileServer' || 'The-KLYRO/TelegramFileServer' }}
+      MIRROR_TOKEN: ${{ secrets.MIRROR_REPO_TOKEN }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -144,3 +151,20 @@ jobs:
           files: release-assets/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish GitHub Release (mirror repo)
+        # No target_commitish here on purpose: the two repos carry the same
+        # content under different SHAs (each platform squashes its own merge
+        # commits), so this run's sha does not exist in the mirror. An
+        # omitted target_commitish tags the mirror's default branch head,
+        # which the sync keeps at the same content.
+        if: ${{ env.MIRROR_TOKEN != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.MIRROR_REPO }}
+          tag_name: v${{ needs.validate.outputs.version }}
+          name: Release v${{ needs.validate.outputs.version }}
+          generate_release_notes: true
+          files: release-assets/**/*
+        env:
+          GITHUB_TOKEN: ${{ env.MIRROR_TOKEN }}
