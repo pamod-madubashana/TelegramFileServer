@@ -1,0 +1,30 @@
+{
+  "name": "TelegramFileServer",
+  "description": "Your files, in Telegram. Served as your own cloud drive. Rust + Axum server with a React web UI, MongoDB metadata, Telegram storage.",
+  "keywords": ["telegram", "file-server", "cloud-drive", "rust", "react"],
+  "website": "https://github.com/pamod-madubashana/TelegramFileServer",
+  "repository": "https://github.com/pamod-madubashana/TelegramFileServer",
+  "stack": "container",
+  "env": {
+    "HOST": {
+      "description": "Bind address. Heroku only routes traffic to processes bound to 0.0.0.0 — leave this value as is.",
+      "value": "0.0.0.0"
+    },
+    "TFS_MONGO_URI": {
+      "description": "MongoDB (Atlas) connection string. Must be the same URI the setup wizard's step 1 uses. Survives dyno restarts and rebuilds — the container filesystem is wiped on every deploy.",
+      "required": true
+    },
+    "TFS_WIZARD_PASSWORD": {
+      "description": "Setup wizard password (8+ characters). It encrypts the Telegram credentials stored in MongoDB and must match the password entered in the wizard's step 1.",
+      "required": true
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "healthcheck": "/healthz",
+  "addons": []
+}

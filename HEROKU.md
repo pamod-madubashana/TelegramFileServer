@@ -27,6 +27,14 @@ Two Heroku constraints shaped the setup, and the server now handles both:
 
 ## One-time setup
 
+The quickest route is the Deploy button — it creates the app from
+`app.json` (container stack, `HOST` prefilled) and prompts for the two
+secrets before the first build:
+
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/pamod-madubashana/TelegramFileServer/tree/v2)
+
+The CLI route is equivalent:
+
 ```bash
 heroku create <your-app-name>
 heroku stack:set container          # required for heroku.yml + Dockerfile
