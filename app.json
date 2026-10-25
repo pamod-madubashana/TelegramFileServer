@@ -2,6 +2,7 @@
   "name": "TelegramFileServer",
   "description": "Your files, in Telegram. Served as your own cloud drive. Rust + Axum server with a React web UI, MongoDB metadata, Telegram storage.",
   "keywords": ["telegram", "file-server", "cloud-drive", "rust", "react"],
+  "logo": "https://raw.githubusercontent.com/pamod-madubashana/TelegramFileServer/v2/crates/server/static/icon.png",
   "website": "https://github.com/pamod-madubashana/TelegramFileServer",
   "repository": "https://github.com/pamod-madubashana/TelegramFileServer",
   "stack": "container",

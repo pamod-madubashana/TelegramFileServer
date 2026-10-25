@@ -65,6 +65,8 @@ while the remaining areas are still placeholders or planned expansions.
 - SSE-based events for progress and status updates
 - Built around a reusable `TelegramClient` transport abstraction
 
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/The-KLYRO/TelegramFileServer/tree/v2)
+
 ## Quickstart
 
 ```bash
