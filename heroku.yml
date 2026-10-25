@@ -1,0 +1,5 @@
+# Heroku container-stack build definition. Requires the app to run the
+# container stack (`heroku stack:set container`) — see HEROKU.md.
+build:
+  docker:
+    web: Dockerfile

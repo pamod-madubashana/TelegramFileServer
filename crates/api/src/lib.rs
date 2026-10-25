@@ -33,8 +33,8 @@ use std::{
 use tfs_config::{
     CheckResponse, ConfigError, KdfParams, SaveResponse, Step1Input, Step2Input,
     appdata::{
-        ConnectionStore, delete_connection, delete_local_config, get_bin_dir, load_connection,
-        load_local_config, save_connection, save_local_config,
+        ConnectionStore, LocalConfig, delete_connection, delete_local_config, get_bin_dir,
+        load_connection, load_local_config, save_connection, save_local_config,
     },
     create_setup_config, verify_and_decrypt,
 };
@@ -639,7 +639,41 @@ struct TelegramCreds {
     session_path: PathBuf,
 }
 
-fn load_telegram_creds() -> Result<TelegramCreds, ApiError> {
+/// Rebuild the local config mirror from the setup config in MongoDB.
+///
+/// Called when `config.tfs` has no setup section — most often a container
+/// host whose filesystem was wiped since the wizard last ran. MongoDB holds
+/// the authoritative setup config, so this restores the mirror from there
+/// (the same local-first-then-Mongo order the resume endpoint uses) and
+/// saves it back so later loads stay on the cheap local KDF.
+async fn rebuild_local_config(conn: &ConnectionStore) -> Result<LocalConfig, ApiError> {
+    let client = connect(&conn.mongo_uri)
+        .await
+        .map_err(|e| ApiError::Telegram(format!("cannot reach MongoDB to restore config: {e}")))?;
+    let config = load_config(&client).await.map_err(|e| {
+        ApiError::Telegram(format!(
+            "no setup config in MongoDB to restore: {e} — re-run the setup wizard"
+        ))
+    })?;
+    let sensitive = verify_and_decrypt(&config, &conn.password).map_err(|_| {
+        ApiError::Telegram(
+            "wizard password does not open the stored setup config — re-run the setup wizard"
+                .to_string(),
+        )
+    })?;
+    let local = LocalConfig {
+        owner_id: config.owner_id,
+        default_chat_id: config.default_chat_id,
+        created_at: config.created_at,
+        sensitive: sensitive.clone(),
+    };
+    if let Err(e) = save_local_config(&config, &sensitive, &conn.password) {
+        tracing::warn!(error = %e, "could not re-mirror setup config to config.tfs");
+    }
+    Ok(local)
+}
+
+async fn load_telegram_creds() -> Result<TelegramCreds, ApiError> {
     let conn = load_connection()
         .map_err(|e| ApiError::Telegram(format!("no saved connection: {e}")))?
         .ok_or_else(|| {
@@ -647,11 +681,15 @@ fn load_telegram_creds() -> Result<TelegramCreds, ApiError> {
                 "server is not configured yet — complete the setup wizard".to_string(),
             )
         })?;
-    let local = load_local_config(&conn.password)
-        .map_err(|e| ApiError::Telegram(format!("local config mirror unreadable: {e}")))?
-        .ok_or_else(|| {
-            ApiError::Telegram("local config mirror missing — re-run the setup wizard".to_string())
-        })?;
+    let local = match load_local_config(&conn.password) {
+        Ok(Some(local)) => local,
+        Ok(None) => rebuild_local_config(&conn).await?,
+        Err(e) => {
+            return Err(ApiError::Telegram(format!(
+                "local config mirror unreadable: {e}"
+            )));
+        }
+    };
     let api_id = i32::try_from(local.sensitive.api_id)
         .ok()
         .filter(|id| *id > 0)
@@ -701,7 +739,7 @@ type TgGuard<'a> = tokio::sync::MutexGuard<'a, Option<GrammersClient>>;
 
 /// Lazily connect (once per process) and hand out the lookup client.
 async fn tg_lookup_client(state: &AppState) -> Result<(TelegramCreds, TgGuard<'_>), ApiError> {
-    let creds = load_telegram_creds()?;
+    let creds = load_telegram_creds().await?;
     let mut guard = state.tg.lock().await;
     if guard.is_none() {
         let mut client = GrammersClient::new_bot(
@@ -1876,7 +1914,7 @@ impl AppState {
         let pool = self
             .transfer
             .get_or_try_init(|| async {
-                let creds = load_telegram_creds()?;
+                let creds = load_telegram_creds().await?;
                 tracing::info!(
                     "transfer pool ready with {} bot token(s)",
                     creds.bot_tokens.len()
@@ -1902,7 +1940,7 @@ impl AppState {
         let handle = self
             .claim_bot
             .get_or_try_init(|| async {
-                let creds = load_telegram_creds()?;
+                let creds = load_telegram_creds().await?;
                 let token = creds
                     .bot_tokens
                     .first()
@@ -2644,10 +2682,7 @@ async fn fs_storage_stats(
         .await
         .map_err(|e| ApiError::Database(DbError::from(e)))?
     {
-        let media_type = row
-            .get_str("_id")
-            .unwrap_or("document")
-            .to_string();
+        let media_type = row.get_str("_id").unwrap_or("document").to_string();
         let count = row.get_i64("count").unwrap_or(0);
         let total_bytes = row.get_i64("total_bytes").unwrap_or(0);
         buckets.push(StorageStatsBucket {
@@ -2822,7 +2857,11 @@ async fn storage_drives_post(
         .await?
         .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
 
-    if user.storage_drives.iter().any(|d| d.chat_id == input.chat_id) {
+    if user
+        .storage_drives
+        .iter()
+        .any(|d| d.chat_id == input.chat_id)
+    {
         return Err(ApiError::Conflict(format!(
             "chat {} is already a drive",
             input.chat_id
@@ -4099,12 +4138,7 @@ async fn run_history_index(
             guard.scanned = scanned;
             guard.indexed = total_new;
         }
-        publish_index_progress(
-            state,
-            latest_id,
-            covered_before + page_ids,
-            total_new,
-        );
+        publish_index_progress(state, latest_id, covered_before + page_ids, total_new);
 
         // Walk downward by one page: the next batch is [offset-PAGE, offset).
         offset_id -= PAGE;
@@ -4303,7 +4337,10 @@ pub fn router(mongo_uri: String) -> Router {
             "/api/storage/drives",
             get(storage_drives_get).post(storage_drives_post),
         )
-        .route("/api/storage/drives/:chat_id", delete(storage_drives_delete))
+        .route(
+            "/api/storage/drives/:chat_id",
+            delete(storage_drives_delete),
+        )
         // Live drive browsing: pages, media and previews keyed on chat+message
         // so never-indexed chats work without Mongo rows.
         .route("/api/fs/drive/items", get(fs_drive_items))
@@ -4313,7 +4350,7 @@ pub fn router(mongo_uri: String) -> Router {
         )
         .route("/api/fs/drive/thumbnail", get(fs_drive_thumbnail))
         .route("/api/fs/media", get(media_by_message))
-    .route("/api/fs/thumbnail", get(thumbnail_by_message))
+        .route("/api/fs/thumbnail", get(thumbnail_by_message))
         .route("/api/fs/index", post(fs_index))
         // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
         // (which serves index.html 200 and breaks response.json()).

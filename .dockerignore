@@ -1,0 +1,16 @@
+# Build context trim: anything not needed to build the binary or the UI.
+.git
+.github
+.githooks
+.opencode
+graphify-out
+target
+webui/node_modules
+.venv
+venv
+tests
+*.log
+*.session
+*.ps1
+.tfs-server.log
+.tfs-server.err.log

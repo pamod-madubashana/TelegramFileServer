@@ -264,11 +264,36 @@ fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Connection from the environment, for hosts with an ephemeral filesystem
+/// (Heroku-style containers) where `config.tfs`/`data.tfs` are wiped on every
+/// restart. Both vars must be set — the values are exactly what the wizard's
+/// step 1 persists: `TFS_MONGO_URI` (the URI) and `TFS_WIZARD_PASSWORD` (the
+/// password that decrypts the setup config in MongoDB).
+fn connection_from_env() -> Option<ConnectionStore> {
+    let mongo_uri = std::env::var("TFS_MONGO_URI").ok()?;
+    let password = std::env::var("TFS_WIZARD_PASSWORD").ok()?;
+    if mongo_uri.trim().is_empty() || password.is_empty() {
+        return None;
+    }
+    Some(ConnectionStore {
+        mongo_uri,
+        password,
+    })
+}
+
 /// Load the connection: the wizard password from appdata `data.tfs`, the
 /// encrypted MongoDB URI from the binary-dir `config.tfs` bundle.
 /// Returns `Ok(None)` if either file is missing/corrupt, or if the stored
 /// URI no longer decrypts (password changed — the wizard restarts at step 1).
+///
+/// The environment pair above takes precedence over disk: on an ephemeral
+/// host the files may be absent or stale at any moment, so an explicit
+/// operator-provided connection is always the authoritative one.
 pub fn load_connection() -> anyhow::Result<Option<ConnectionStore>> {
+    if let Some(store) = connection_from_env() {
+        return Ok(Some(store));
+    }
+
     let Some(password_bytes) = read_container(&password_file_path())? else {
         return Ok(None);
     };
@@ -385,13 +410,17 @@ mod tests {
     /// the tfs-api test lock).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// Point appdata and binary-dir storage at isolated temp folders.
+    /// Point appdata and binary-dir storage at isolated temp folders, and
+    /// scrub the connection env vars so a shell that has them exported
+    /// cannot leak a connection into every test.
     fn set_test_dirs(base: &std::path::Path) -> (PathBuf, PathBuf) {
         let data = base.join("appdata");
         let bin = base.join("bindir");
         unsafe {
             env::set_var("TFS_DATA_DIR", &data);
             env::set_var("TFS_BIN_DIR", &bin);
+            env::remove_var("TFS_MONGO_URI");
+            env::remove_var("TFS_WIZARD_PASSWORD");
         }
         (data, bin)
     }
@@ -400,6 +429,8 @@ mod tests {
         unsafe {
             env::remove_var("TFS_DATA_DIR");
             env::remove_var("TFS_BIN_DIR");
+            env::remove_var("TFS_MONGO_URI");
+            env::remove_var("TFS_WIZARD_PASSWORD");
         }
     }
 
@@ -490,6 +521,50 @@ mod tests {
 
         // Idempotent on a missing file.
         delete_connection().unwrap();
+
+        clear_test_dirs();
+    }
+
+    /// The env connection needs both halves: a lone TFS_MONGO_URI reads as
+    /// not-set so a stray URI in the shell cannot half-configure a machine.
+    #[test]
+    fn test_env_connection_requires_both_vars() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempdir().unwrap();
+        set_test_dirs(temp_dir.path());
+
+        assert!(load_connection().unwrap().is_none());
+        unsafe {
+            env::set_var("TFS_MONGO_URI", "mongodb://localhost:27017");
+        }
+        // Password var missing → disk path, which is empty here.
+        assert!(load_connection().unwrap().is_none());
+        unsafe {
+            env::remove_var("TFS_MONGO_URI");
+        }
+    }
+
+    /// Both vars set → the env connection wins over whatever is on disk,
+    /// which is what keeps an ephemeral-filesystem host configured.
+    #[test]
+    fn test_env_connection_overrides_disk() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = tempdir().unwrap();
+        set_test_dirs(temp_dir.path());
+
+        save_connection(&test_store()).unwrap();
+
+        unsafe {
+            env::set_var("TFS_MONGO_URI", "mongodb://env-host:27017");
+            env::set_var("TFS_WIZARD_PASSWORD", "env-password");
+        }
+        let loaded = load_connection().unwrap().unwrap();
+        assert_eq!(loaded.mongo_uri, "mongodb://env-host:27017");
+        assert_eq!(loaded.password, "env-password");
+        unsafe {
+            env::remove_var("TFS_MONGO_URI");
+            env::remove_var("TFS_WIZARD_PASSWORD");
+        }
 
         clear_test_dirs();
     }

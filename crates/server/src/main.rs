@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         .fallback_service(serve_dir)
         .layer(middleware::from_fn(log_requests));
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = configured_addr(port)?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Server listening on http://{}", addr);
 
@@ -127,6 +127,22 @@ fn configured_port() -> u16 {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8090)
+}
+
+/// Loopback by default: this is a personal server bound to the operator's
+/// machine. Container hosts (Heroku & friends) route external traffic to a
+/// dyno-private interface, so they set HOST=0.0.0.0 to make the port
+/// reachable from outside the process.
+fn configured_addr(port: u16) -> anyhow::Result<SocketAddr> {
+    let host = std::env::var("HOST")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let ip: std::net::IpAddr = host
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("HOST is not a valid IP address: {host}"))?;
+    Ok(SocketAddr::from((ip, port)))
 }
 
 /// `tfs --wipe-users --yes` — delete every account in `v2_users`.
