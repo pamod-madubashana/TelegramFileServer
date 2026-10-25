@@ -4,6 +4,7 @@ import {
   CircleHelp,
   Download,
   HardDrive,
+  LogOut,
   Palette,
   User,
   Users,
@@ -14,7 +15,7 @@ import {
   getSettingsPageLabel,
   useReactPageLogger,
 } from "@/lib/reactPageLogger";
-import { useMe } from "@/lib/auth";
+import { apiSend, clearAuthToken, useMe } from "@/lib/auth";
 import { type SettingsRouteState } from "@/pages/explorer/explorerSessionStore";
 
 type NavItem = {
@@ -91,6 +92,23 @@ export default function SettingsPage() {
     navigate(routeState?.returnTo || "/explorer", { replace: true });
   };
 
+  const handleLogout = async () => {
+    window.sessionStorage.setItem("skybox_explicit_logout_in_progress", "1");
+    try {
+      // Drop the server-side session first — the endpoint needs the Bearer
+      // token that apiSend attaches, so this must run before clearAuthToken.
+      await apiSend("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Idempotent endpoint; even a miss is safe — the local token goes
+      // either way and the server session dies with the process.
+    }
+    clearAuthToken();
+    window.sessionStorage.removeItem("skybox_explicit_logout_in_progress");
+    // Full navigation (not router navigate) resets in-memory query state,
+    // the same rationale as handleAuthFailure in lib/auth.
+    window.location.assign("/login");
+  };
+
   return (
     <div className="relative h-full flex overflow-hidden">
       <div className="w-64 h-full glass-sidebar flex flex-col relative overflow-hidden">
@@ -135,6 +153,17 @@ export default function SettingsPage() {
               );
             },
           )}
+        </div>
+
+        <div className="p-2 border-t border-sidebar-border">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 w-full text-left text-foreground hover:bg-sidebar-accent/50"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="text-body font-medium">Log out</span>
+          </button>
         </div>
       </div>
 
