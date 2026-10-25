@@ -236,6 +236,24 @@ async fn session_user(
     find_user(mongo, &username).await.map_err(Into::into)
 }
 
+/// Normalize a username exactly as typed: Telegram displays — and
+/// copy-paste carries — a leading `@`, and stray surrounding whitespace is
+/// common. Strip both so "@name" behaves identically to "name" everywhere.
+/// Only one `@` goes: a second one must still fail validation.
+fn normalize_username(input: &str) -> &str {
+    let trimmed = input.trim();
+    trimmed.strip_prefix('@').unwrap_or(trimmed)
+}
+
+/// Validate a typed username and hand back its normalized form — what the
+/// callers store, look up, and echo must be the stripped name, or the `@`
+/// would live on in the database.
+fn validated_username(input: &str) -> Result<String, String> {
+    let normalized = normalize_username(input);
+    validate_username(normalized)?;
+    Ok(normalized.to_string())
+}
+
 /// Username validation: 3-32 chars, [A-Za-z0-9_.-]
 fn validate_username(username: &str) -> Result<(), String> {
     if username.len() < 3 || username.len() > 32 {
@@ -833,7 +851,7 @@ async fn auth_register(
     State(state): State<Arc<AppState>>,
     Json(input): Json<RegisterRequest>,
 ) -> ApiResult<Json<RegisterResponse>> {
-    validate_username(&input.username).map_err(ApiError::Validation)?;
+    let username = validated_username(&input.username).map_err(ApiError::Validation)?;
     validate_password(&input.password).map_err(ApiError::Validation)?;
 
     let client = state.mongo_client().await?;
@@ -841,7 +859,7 @@ async fn auth_register(
     if count_role(&client, "admin").await? == 0 {
         // ===== Owner bootstrap =====
         let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
-        if !is_owner_signup_username(&input.username, &owner_name) {
+        if !is_owner_signup_username(&username, &owner_name) {
             return Err(ApiError::Forbidden(format!(
                 "username must match the Telegram owner account \"{owner_name}\" \
                  (or \"{ADMIN_USERNAME}\")"
@@ -854,7 +872,7 @@ async fn auth_register(
             &client,
             owner_id,
             &owner_name,
-            &input.username,
+            &username,
             password_hash,
             None,
             None,
@@ -864,7 +882,7 @@ async fn auth_register(
     }
 
     // ===== Invited users: claim a username an admin created =====
-    let Some(existing) = find_user(&client, &input.username).await? else {
+    let Some(existing) = find_user(&client, &username).await? else {
         return Err(ApiError::Forbidden(
             "registration closed — ask an administrator to create your account".to_string(),
         ));
@@ -956,8 +974,11 @@ async fn auth_login(
     Json(input): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
     let client = state.mongo_client().await?;
+    // A username copied out of Telegram carries a leading `@` — sign-in
+    // with it must behave like sign-in without it.
+    let username = normalize_username(&input.username);
 
-    let found = find_user(&client, &input.username).await?;
+    let found = find_user(&client, username).await?;
     let user = match found {
         Some(u) => u,
         // The owner may have opened their account under either name, so the
@@ -965,7 +986,7 @@ async fn auth_login(
         // the stored document — a failed login never triggers a Telegram
         // lookup, and every miss still returns the same generic error.
         None => match find_owner(&client).await? {
-            Some(owner) if is_owner_signin_username(&input.username, &owner) => owner,
+            Some(owner) if is_owner_signin_username(username, &owner) => owner,
             // User not found — same error as wrong password (no user enumeration)
             _ => return Err(ApiError::InvalidInput(INVALID_CREDENTIALS.to_string())),
         },
@@ -1148,19 +1169,19 @@ async fn claim_start(
     State(state): State<Arc<AppState>>,
     Json(input): Json<ClaimStartRequest>,
 ) -> ApiResult<Json<ClaimStartResponse>> {
-    validate_username(&input.username).map_err(ApiError::Validation)?;
+    let username = validated_username(&input.username).map_err(ApiError::Validation)?;
 
     let client = state.mongo_client().await?;
     let expected_sender = if count_role(&client, "admin").await? == 0 {
         // ===== Owner bootstrap =====
         let (owner_id, owner_name) = resolve_owner_identity(&state).await?;
-        if !is_owner_signup_username(&input.username, &owner_name) {
+        if !is_owner_signup_username(&username, &owner_name) {
             return Err(ApiError::Forbidden(format!(
                 "username must match the Telegram owner account \"{owner_name}\" \
                  (or \"{ADMIN_USERNAME}\")"
             )));
         }
-        if let Some(existing) = find_user(&client, &input.username).await?
+        if let Some(existing) = find_user(&client, &username).await?
             && existing.claimed()
         {
             return Err(ApiError::Conflict(
@@ -1170,7 +1191,7 @@ async fn claim_start(
         owner_id
     } else {
         // ===== Invited users: the name must exist and still be unclaimed =====
-        let Some(existing) = find_user(&client, &input.username).await? else {
+        let Some(existing) = find_user(&client, &username).await? else {
             return Err(ApiError::Forbidden(
                 "registration closed — ask an administrator to create your account".to_string(),
             ));
@@ -1187,11 +1208,11 @@ async fn claim_start(
     let secret = generate_claim_secret();
     state.claims.lock().unwrap().insert(
         secret.clone(),
-        ClaimEntry::new(input.username.clone(), expected_sender),
+        ClaimEntry::new(username.clone(), expected_sender),
     );
-    tracing::info!(username = %input.username, ?expected_sender, "account claim started");
+    tracing::info!(username = %username, ?expected_sender, "account claim started");
     Ok(Json(ClaimStartResponse {
-        username: input.username,
+        username,
         deep_link: format!("https://t.me/{}?start={}", handle.bot_username, secret),
         secret,
     }))
@@ -1316,10 +1337,12 @@ async fn claim_available(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ClaimAvailableQuery>,
 ) -> ApiResult<Json<ClaimAvailableResponse>> {
-    // Syntax first: never touch Mongo for a malformed name.
-    if let Err(reason) = validate_username(&query.username) {
+    let username = normalize_username(&query.username).to_string();
+    // Syntax first: never touch Mongo for a malformed name. The response
+    // echoes the normalized form, so the client pre-fills the clean name.
+    if let Err(reason) = validate_username(&username) {
         return Ok(Json(ClaimAvailableResponse {
-            username: query.username,
+            username,
             available: false,
             reason: Some(reason.to_string()),
         }));
@@ -1328,37 +1351,37 @@ async fn claim_available(
     let client = state.mongo_client().await?;
     let response = if count_role(&client, "admin").await? == 0 {
         // ===== Owner bootstrap: the name is free to claim =====
-        if find_user(&client, &query.username)
+        if find_user(&client, &username)
             .await?
             .is_some_and(|u| u.claimed())
         {
             ClaimAvailableResponse {
-                username: query.username,
+                username: username.clone(),
                 available: false,
                 reason: Some("username already registered — sign in instead".to_string()),
             }
         } else {
             ClaimAvailableResponse {
-                username: query.username,
+                username: username.clone(),
                 available: true,
                 reason: None,
             }
         }
     } else {
         // ===== Invited users: only an existing, unclaimed invite qualifies =====
-        match find_user(&client, &query.username).await? {
+        match find_user(&client, &username).await? {
             Some(existing) if !existing.claimed() => ClaimAvailableResponse {
-                username: query.username,
+                username: username.clone(),
                 available: true,
                 reason: None,
             },
             Some(_) => ClaimAvailableResponse {
-                username: query.username,
+                username: username.clone(),
                 available: false,
                 reason: Some("username already registered — sign in instead".to_string()),
             },
             None => ClaimAvailableResponse {
-                username: query.username,
+                username: username.clone(),
                 available: false,
                 reason: Some(
                     "registration closed — ask an administrator to create your account".to_string(),
@@ -1421,12 +1444,13 @@ async fn auth_username_available(
 ) -> ApiResult<Json<UsernameAvailableResponse>> {
     let username = require_session(&headers, &state.sessions)?;
 
-    let (available, reason) = match validate_username(&query.username) {
+    let candidate = normalize_username(&query.username).to_string();
+    let (available, reason) = match validate_username(&candidate) {
         Err(msg) => (false, Some(msg)),
         Ok(()) => {
             let client = state.mongo_client().await?;
             let me_id = username.to_lowercase();
-            match find_user(&client, &query.username).await? {
+            match find_user(&client, &candidate).await? {
                 // Already yours (differing only in case) — nothing to change.
                 Some(existing) if existing.id == me_id => (true, None),
                 Some(_) => (false, Some("username already taken".to_string())),
@@ -1436,7 +1460,7 @@ async fn auth_username_available(
     };
 
     Ok(Json(UsernameAvailableResponse {
-        username: query.username,
+        username: candidate,
         available,
         reason,
     }))
@@ -1452,7 +1476,7 @@ async fn auth_change_username(
     headers: HeaderMap,
     Json(input): Json<ChangeUsernameRequest>,
 ) -> ApiResult<Json<ChangeUsernameResponse>> {
-    validate_username(&input.username).map_err(ApiError::Validation)?;
+    let username = validated_username(&input.username).map_err(ApiError::Validation)?;
 
     let old_username = require_session(&headers, &state.sessions)?;
     let client = state.mongo_client().await?;
@@ -1460,7 +1484,7 @@ async fn auth_change_username(
         .await?
         .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
 
-    if me.username.eq_ignore_ascii_case(&input.username) {
+    if me.username.eq_ignore_ascii_case(&username) {
         // Same name, different casing: the session already fits.
         return Ok(Json(ChangeUsernameResponse {
             username: me.username,
@@ -1470,7 +1494,7 @@ async fn auth_change_username(
         }));
     }
 
-    if find_user(&client, &input.username).await?.is_some() {
+    if find_user(&client, &username).await?.is_some() {
         return Err(ApiError::Conflict(
             "that username is already taken".to_string(),
         ));
@@ -1489,8 +1513,8 @@ async fn auth_change_username(
             }
         }
     } else {
-        match resolve_tg_user_id(&state, &input.username).await {
-            Ok(Some(id)) => (Some(id), Some(input.username.clone())),
+        match resolve_tg_user_id(&state, &username).await {
+            Ok(Some(id)) => (Some(id), Some(username.clone())),
             Ok(None) => (None, None),
             Err(e) => {
                 tracing::warn!("rename of {} kept its Telegram link: {e}", me.username);
@@ -1500,8 +1524,8 @@ async fn auth_change_username(
     };
 
     let renamed = UserDoc {
-        id: input.username.to_lowercase(),
-        username: input.username.clone(),
+        id: username.to_lowercase(),
+        username: username.clone(),
         password_hash: me.password_hash.clone(),
         role: me.role.clone(),
         telegram_user_id,
@@ -2406,33 +2430,31 @@ async fn admin_create_user(
     headers: HeaderMap,
     Json(input): Json<AdminCreateUserRequest>,
 ) -> ApiResult<(StatusCode, Json<UserSummary>)> {
-    validate_username(&input.username).map_err(ApiError::Validation)?;
+    let username = validated_username(&input.username).map_err(ApiError::Validation)?;
     let actor = require_admin(&headers, &state).await?;
     let client = state.mongo_client().await?;
-    if find_user(&client, &input.username).await?.is_some() {
+    if find_user(&client, &username).await?.is_some() {
         return Err(ApiError::Conflict("username already exists".to_string()));
     }
 
-    let (telegram_user_id, telegram_username) = match resolve_tg_user_id(&state, &input.username)
-        .await
-    {
-        Ok(Some(id)) => (Some(id), Some(input.username.clone())),
+    let (telegram_user_id, telegram_username) = match resolve_tg_user_id(&state, &username).await {
+        Ok(Some(id)) => (Some(id), Some(username.clone())),
         Ok(None) => {
             tracing::info!(
                 "invite {} created unlinked — no Telegram user resolves to that username (resync later)",
-                input.username
+                username
             );
             (None, None)
         }
         Err(e) => {
-            tracing::warn!("telegram sync skipped for invite {}: {}", input.username, e);
+            tracing::warn!("telegram sync skipped for invite {}: {}", username, e);
             (None, None)
         }
     };
 
     let user = UserDoc {
-        id: input.username.to_lowercase(),
-        username: input.username.clone(),
+        id: username.to_lowercase(),
+        username: username.clone(),
         password_hash: None,
         role: "user".to_string(),
         telegram_user_id,
@@ -4690,6 +4712,24 @@ mod tests {
     }
 
     // ===== Auth tests (offline: validation + session store) =====
+
+    #[test]
+    fn test_normalize_username_strips_leading_at_and_space() {
+        // A copied Telegram handle carries exactly one leading `@` (plus
+        // often stray whitespace) — it must behave like the bare name.
+        assert_eq!(normalize_username("@TheRandy_au"), "TheRandy_au");
+        assert_eq!(normalize_username("  @TheRandy_au "), "TheRandy_au");
+        assert_eq!(normalize_username("TheRandy_au"), "TheRandy_au");
+        // Only one `@` goes: a second must still fail validation.
+        assert_eq!(normalize_username("@@name"), "@name");
+        assert!(validated_username("@TheRandy_au").is_ok());
+        assert_eq!(
+            validated_username("@TheRandy_au").unwrap(),
+            "TheRandy_au".to_string()
+        );
+        assert!(validated_username("@@name").is_err());
+        assert!(validated_username("@ab").is_err());
+    }
 
     #[test]
     fn test_validate_username_valid() {

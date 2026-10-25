@@ -17,6 +17,7 @@ import {
   type ClaimStartResponse,
 } from "@/lib/auth";
 import appStartIcon from "@/assets/images/icon.png";
+import { normalizeUsername } from "@/lib/utils";
 
 interface LoginResponse {
   token: string;
@@ -237,8 +238,12 @@ export default function LoginPage() {
   };
 
   const handleUsernameChange = (value: string) => {
-    setUsername(value);
-    setUsernameError(validateUsername(value));
+    // A handle pasted out of Telegram carries a leading `@` — normalize at
+    // the input so validation, availability checks, and submits all see
+    // the bare name.
+    const normalized = normalizeUsername(value);
+    setUsername(normalized);
+    setUsernameError(validateUsername(normalized));
     if (serverError) setServerError("");
   };
 

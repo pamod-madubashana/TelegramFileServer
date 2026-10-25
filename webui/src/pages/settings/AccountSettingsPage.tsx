@@ -13,6 +13,7 @@ import {
 } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { normalizeUsername } from "@/lib/utils";
 import SettingsSectionLayout from "./SettingsSectionLayout";
 
 const USERNAME_REGEX = /^[A-Za-z0-9_.-]{3,32}$/;
@@ -210,7 +211,9 @@ export default function AccountSettingsPage() {
             <Input
               value={newUsername}
               onChange={(event) => {
-                setNewUsername(event.target.value);
+                // A handle pasted out of Telegram carries a leading `@` —
+                // strip it so the rename targets the bare name.
+                setNewUsername(normalizeUsername(event.target.value));
                 if (usernameError) setUsernameError("");
               }}
               placeholder="New username (3-32 chars: letters, numbers, _, ., -)"

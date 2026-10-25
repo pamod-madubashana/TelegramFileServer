@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { normalizeUsername } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
@@ -290,7 +291,9 @@ export default function AdminUsersPage() {
             <Input
               value={newUsername}
               onChange={(e) => {
-                setNewUsername(e.target.value);
+                // A handle pasted out of Telegram carries a leading `@` —
+                // strip it so the invite is created under the bare name.
+                setNewUsername(normalizeUsername(e.target.value));
                 if (createError) setCreateError("");
               }}
               placeholder="Username (3-32 chars: letters, numbers, _, ., -)"
