@@ -116,6 +116,22 @@ const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_RETRY_COUNT = 2;
 const DEFAULT_INDEXING_TIMEOUT_MS = 15 * 60 * 1000;
 
+/** Telegram's upload transport limit (4000 parts × 512 KiB) — mirrors
+ * MAX_UPLOAD_BYTES on the server so impossible uploads fail in the queue
+ * UI instead of as a FILE_PARTS_INVALID RPC error after the transfer. */
+const MAX_UPLOAD_BYTES = 4000 * 512 * 1024;
+
+const uploadPreflightError = (size: number): string | null => {
+  if (size === 0) {
+    return "Empty file — Telegram cannot store zero-byte files.";
+  }
+  if (size > MAX_UPLOAD_BYTES) {
+    const sizeMb = Math.round(size / (1024 * 1024));
+    return `Too large for Telegram (${sizeMb} MB) — the limit is about 2000 MB.`;
+  }
+  return null;
+};
+
 const normalizeRelPath = (value: string): string => {
   return value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 };
@@ -509,6 +525,10 @@ export class UploadManager {
           ? rootDbPath
           : joinSavedDbPath(rootDbPath, dirs.join("/"));
       const uploadId = createUploadId();
+      // Pre-flight rejects (empty / over-limit) stay in the queue as failed
+      // with a reason; pump() only picks QUEUED/FAILED_RETRYABLE, so they
+      // never start a transfer.
+      const preflightError = uploadPreflightError(entry.file.size);
       tasks.push({
         uploadId,
         entry,
@@ -518,8 +538,9 @@ export class UploadManager {
         caption: args.caption,
         options: args.options,
         attempt: 0,
-        state: "QUEUED",
+        state: preflightError ? "FAILED_FATAL" : "QUEUED",
         progressPercent: 0,
+        message: preflightError ?? undefined,
         cancelRequested: false,
       });
     }

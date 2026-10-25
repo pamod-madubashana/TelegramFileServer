@@ -12,6 +12,35 @@ use tokio::sync::mpsc;
 
 use crate::{ApiError, DbError, SessionStore, data_database_name, validate_session};
 
+/// Telegram's upload transport limit, as imposed by the MTProto part model
+/// the transfer engine uses: at most 4000 parts of 512 KiB each (grammers'
+/// fixed part size), so no file larger than that can be stored.
+pub(crate) const TELEGRAM_PART_SIZE_BYTES: u64 = 512 * 1024;
+pub(crate) const TELEGRAM_MAX_PARTS: u64 = 4000;
+pub(crate) const MAX_UPLOAD_BYTES: u64 = TELEGRAM_MAX_PARTS * TELEGRAM_PART_SIZE_BYTES;
+
+/// Reject uploads Telegram cannot store, before a bot is leased and any
+/// bytes travel.
+///
+/// Both bounds surface remotely as the same opaque RPC error
+/// (`400 FILE_PARTS_INVALID`): a zero-byte file produces a zero-part upload,
+/// and anything over 4000 × 512 KiB exceeds the part-count limit. Failing
+/// here turns that into an actionable message instead.
+pub(crate) fn validate_upload_size(size: u64) -> Result<(), ApiError> {
+    if size == 0 {
+        return Err(ApiError::Validation(
+            "empty files cannot be uploaded — Telegram cannot store zero-byte files".to_string(),
+        ));
+    }
+    if size > MAX_UPLOAD_BYTES {
+        return Err(ApiError::Validation(format!(
+            "file is {} bytes; Telegram's upload limit is {} bytes (4000 parts × 512 KiB)",
+            size, MAX_UPLOAD_BYTES
+        )));
+    }
+    Ok(())
+}
+
 /// One file stored in Telegram, owned by the account that uploaded it.
 ///
 /// The `_id` is derived from owner + destination + name, so a name collision
@@ -495,6 +524,18 @@ impl DownloadSink for StreamSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_size_bounds_match_telegram_part_limits() {
+        // One full part exactly, and the maximum 4000-part file, are fine.
+        assert!(validate_upload_size(1).is_ok());
+        assert!(validate_upload_size(TELEGRAM_PART_SIZE_BYTES).is_ok());
+        assert!(validate_upload_size(MAX_UPLOAD_BYTES).is_ok());
+        // One byte over the part limit is already too many parts.
+        assert!(validate_upload_size(MAX_UPLOAD_BYTES + 1).is_err());
+        // Zero bytes means zero parts — Telegram rejects it.
+        assert!(validate_upload_size(0).is_err());
+    }
 
     #[test]
     fn id_is_keyed_by_owner_folder_and_name() {

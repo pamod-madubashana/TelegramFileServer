@@ -3057,6 +3057,10 @@ async fn files_upload(
 
     let staged = staged
         .ok_or_else(|| ApiError::Validation("missing \"file\" field in the upload".to_string()))?;
+    // Fail fast on files Telegram cannot store: a zero-byte or >4000-part
+    // upload would otherwise travel all the way to the RPC layer and come
+    // back as an opaque FILE_PARTS_INVALID.
+    files::validate_upload_size(staged.size)?;
     let folder = files::normalize_folder(folder.as_deref().unwrap_or(""), &staged.file_name);
 
     let default = default_chat_id(&client).await?;
